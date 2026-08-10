@@ -40,6 +40,15 @@
   #nrw-drawer .dh button{cursor:pointer;font-family:inherit;color:var(--ink,#111);background:none;touch-action:manipulation}
   #nrw-drawer .dh .fs{border:1px solid var(--line,#ccc);border-radius:8px;padding:4px 8px;min-width:30px;font-size:12px;font-weight:700}
   #nrw-drawer .dh .cls{border:none;font-size:24px;line-height:1;color:var(--ink-soft,#888)}
+  #nrw-drawer .dh .gear{border:1px solid var(--line,#ccc);border-radius:8px;padding:4px 9px;font-size:14px;font-weight:700;cursor:pointer;background:none;color:var(--ink,#111)}
+  #nrw-drawer .nrw-set{display:none;flex-wrap:wrap;gap:8px 12px;padding:10px 16px;border-bottom:1px solid var(--line,#ddd);align-items:center}
+  #nrw-drawer .nrw-set.open{display:flex}
+  #nrw-drawer .nrw-set .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  #nrw-drawer .nrw-set .lbl{font-size:12px;color:var(--ink-soft,#888);font-weight:700}
+  #nrw-drawer .nrw-set .models{display:flex;flex-wrap:wrap;gap:6px}
+  #nrw-drawer .nrw-set .sb{border:1px solid var(--line,#ccc);border-radius:7px;padding:4px 10px;font-size:12.5px;font-weight:700;
+    cursor:pointer;background:var(--panel,#fff);color:var(--ink,#111);text-decoration:none;touch-action:manipulation}
+  #nrw-drawer .nrw-set .sb.on{background:var(--ink,#111);color:var(--panel,#fff);border-color:var(--ink,#111)}
   #nrw-drawer .db{padding:16px;overflow-y:auto;flex:1}
   #nrw-drawer .sel{border:1px solid var(--line,#ccc);border-radius:8px;padding:10px 13px;margin-bottom:14px;
     font-size:var(--nrw-fs);line-height:1.55;color:var(--ink-soft,#555);max-height:34vh;overflow:auto}
@@ -111,6 +120,46 @@
   const fsGet = () => Math.max(FS_MIN, Math.min(FS_MAX, parseInt(localStorage.getItem(FS_KEY) || FS_DEF, 10)));
   const fsSet = (px) => { px = Math.max(FS_MIN, Math.min(FS_MAX, px)); localStorage.setItem(FS_KEY, px); if (drawer) drawer.style.setProperty('--nrw-fs', px + 'px'); };
 
+  // ---- ⚙ settings: model / font / display mode ----
+  const modelName = () => localStorage.getItem('nrw_model') || '';
+  let _models = null;
+  async function buildModels() {
+    const box = drawer.querySelector('.models');
+    if (!_models) {
+      box.textContent = '…';
+      try {
+        const d = await (await fetch(BASE + '/api/models')).json();
+        _models = d.models || [];
+        if (!modelName() && d.default) localStorage.setItem('nrw_model', d.default);
+      } catch (_) { _models = []; }
+    }
+    box.innerHTML = '';
+    const cur = modelName();
+    _models.forEach(name => {
+      const b = document.createElement('button');
+      b.className = 'sb mb' + (name === cur ? ' on' : ''); b.textContent = name;
+      b.onclick = () => { localStorage.setItem('nrw_model', name); buildModels(); };
+      box.appendChild(b);
+    });
+  }
+  function bumpFont(delta) {
+    const px = Math.max(12, Math.min(34, (parseInt(localStorage.getItem('nrw_fs') || '18', 10)) + delta));
+    localStorage.setItem('nrw_fs', px);
+    ['--art-fs', '--nfs', '--nrw-fs'].forEach(k => document.documentElement.style.setProperty(k, px + 'px'));
+    if (drawer) drawer.style.setProperty('--nrw-fs', px + 'px');
+    ['nr_art_fs', 'news_fs', 'nrw_ans_fs'].forEach(k => localStorage.setItem(k, px));  // persist for page-owned controls
+  }
+  function setTheme(t) {
+    document.documentElement.dataset.theme = t;
+    ['nrw_theme', 'news_theme'].forEach(k => localStorage.setItem(k, t));
+    const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = t === 'dark' ? '#121212' : '#ffffff';
+    markTheme();
+  }
+  function markTheme() {
+    const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    if (drawer) drawer.querySelectorAll('.tb').forEach(b => b.classList.toggle('on', b.dataset.t === cur));
+  }
+
   function ensureDOM() {
     if (drawer) return;
     const st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
@@ -130,9 +179,14 @@
     drawer = document.createElement('aside'); drawer.id = 'nrw-drawer';
     drawer.innerHTML =
       '<div class="dh"><div class="t">✨ 解读</div>' +
-      '<button class="fs" data-d="-1" title="字号缩小">A−</button>' +
-      '<button class="fs" data-d="1" title="字号放大">A+</button>' +
+      '<button class="gear" title="设置">⚙</button>' +
       '<button class="cls" title="关闭">×</button></div>' +
+      '<div class="nrw-set">' +
+        '<div class="grp"><span class="lbl">模型</span><span class="models"></span></div>' +
+        '<div class="grp"><span class="lbl">字号</span><button class="sb" data-d="-1">A−</button><button class="sb" data-d="1">A+</button></div>' +
+        '<div class="grp"><span class="lbl">显示</span><button class="sb tb" data-t="light">☀︎ 浅色</button><button class="sb tb" data-t="dark">☾ 深色</button></div>' +
+        '<div class="grp"><a class="sb" href="/reader/?list=1" target="_blank" rel="noopener">📚 待读列表</a></div>' +
+      '</div>' +
       '<div class="db"><div class="sel"></div><div class="thread"></div></div>' +
       '<div class="df"><input type="text" placeholder="追问… （回车发送）" autocomplete="off"><button class="send">发送</button></div>';
     document.body.appendChild(drawer);
@@ -141,8 +195,12 @@
     thread = drawer.querySelector('.thread');
     input = drawer.querySelector('.df input');
     sendBtn = drawer.querySelector('.df .send');
+    const setBox = drawer.querySelector('.nrw-set');
     drawer.querySelector('.cls').onclick = close;
-    drawer.querySelectorAll('.fs').forEach(b => b.onclick = () => fsSet(fsGet() + (+b.dataset.d)));
+    drawer.querySelector('.gear').onclick = (e) => { e.stopPropagation(); setBox.classList.toggle('open'); if (setBox.classList.contains('open')) { buildModels(); markTheme(); } };
+    setBox.querySelectorAll('.sb[data-d]').forEach(b => b.onclick = () => bumpFont(+b.dataset.d));
+    setBox.querySelectorAll('.tb').forEach(b => b.onclick = () => setTheme(b.dataset.t));
+    drawer.querySelector('.db').addEventListener('mousedown', () => setBox.classList.remove('open'));
     sendBtn.onclick = () => { if (active && active.streaming) { active.abort && active.abort.abort(); } else followup(); };
     input.onkeydown = (e) => {
       // ignore Enter while an IME (e.g. Chinese pinyin) is still composing —
@@ -282,7 +340,7 @@
     try {
       const r = await fetch(BASE + '/api/interpret', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: s.payload.text, context: s.payload.context || s.payload.title || '', title: s.payload.title || '', mode: s.mode || 'interpret', history: s.convo }),
+        body: JSON.stringify({ text: s.payload.text, context: s.payload.context || s.payload.title || '', title: s.payload.title || '', mode: s.mode || 'interpret', model: modelName(), history: s.convo }),
         signal: s.abort.signal,
       });
       if (!r.ok) throw new Error('服务返回 HTTP ' + r.status);

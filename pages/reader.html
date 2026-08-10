@@ -255,7 +255,7 @@
   </main>
 
 
-<script src="/static/interpret-widget.js?v=20260810b"></script>
+<script src="/static/interpret-widget.js?v=20260810c"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const main = $('#main'), urlInput = $('#url'), goBtn = $('#go');
@@ -548,7 +548,9 @@ window.addEventListener('scroll', () => {
 
 // ---- restore from ?u= query (robust across browsers) or legacy #u= hash ----
 (function(){
-  const qu = new URLSearchParams(location.search).get('u');   // URLSearchParams already decodes
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('list')) { showList(); return; }                 // ?list=1 → reading list
+  const qu = qs.get('u');                                      // URLSearchParams already decodes
   if (qu) { urlInput.value = qu; loadArticle(qu); return; }
   if (location.hash === '#list') { showList(); return; }
   const m = location.hash.match(/u=([^&]+)/);

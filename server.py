@@ -32,6 +32,12 @@ except ImportError:
 LLM_BASE_URL = (os.environ.get("LLM_BASE_URL") or _cfg.LLM_BASE_URL).rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL") or _cfg.LLM_MODEL
 LLM_API_KEY = os.environ.get("LLM_API_KEY") or _cfg.LLM_API_KEY
+
+# selectable interpret models (keys stay server-side; UI only sees the names)
+MODELS = getattr(_cfg, "MODELS", None) or [
+    {"name": LLM_MODEL, "base_url": LLM_BASE_URL, "api_key": LLM_API_KEY, "model": LLM_MODEL}
+]
+MODELS_BY_NAME = {m["name"]: m for m in MODELS}
 HOST = os.environ.get("HOST") or getattr(_cfg, "HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT") or getattr(_cfg, "PORT", 8000))
 
@@ -191,6 +197,7 @@ class InterpretReq(BaseModel):
     context: str = ""
     title: str = ""
     mode: str = "interpret"   # "interpret" (default) or "grammar"
+    model: str = ""           # selected model NAME (from /api/models); "" = default
     history: list[Msg] = []  # follow-up turns after the initial interpretation
 
 
@@ -273,25 +280,33 @@ def _build_messages(req: InterpretReq):
     return messages
 
 
+@app.get("/api/models")
+async def list_models():
+    return {"models": [m["name"] for m in MODELS], "default": MODELS[0]["name"]}
+
+
 @app.post("/api/interpret")
 async def interpret(req: InterpretReq):
     if not req.text.strip():
         return JSONResponse({"error": "empty selection"}, status_code=400)
 
+    sel = MODELS_BY_NAME.get(req.model) or MODELS[0]   # resolve name -> endpoint/key
+    base = sel["base_url"].rstrip("/")
     payload = {
-        "model": LLM_MODEL,
+        "model": sel["model"],
         "messages": _build_messages(req),
         "stream": True,
         "temperature": 0.3,
         "max_tokens": 800,
     }
-    headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
+    payload.update(sel.get("extra") or {})   # per-model extras (e.g. GLM thinking:disabled)
+    headers = {"Authorization": f"Bearer {sel['api_key']}", "Content-Type": "application/json"}
 
     async def gen():
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 async with client.stream(
-                    "POST", f"{LLM_BASE_URL}/chat/completions", json=payload, headers=headers
+                    "POST", f"{base}/chat/completions", json=payload, headers=headers
                 ) as resp:
                     if resp.status_code != 200:
                         body = (await resp.aread()).decode("utf-8", "replace")[:400]
