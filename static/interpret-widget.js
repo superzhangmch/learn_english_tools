@@ -40,15 +40,17 @@
   #nrw-drawer .dh button{cursor:pointer;font-family:inherit;color:var(--ink,#111);background:none;touch-action:manipulation}
   #nrw-drawer .dh .fs{border:1px solid var(--line,#ccc);border-radius:8px;padding:4px 8px;min-width:30px;font-size:12px;font-weight:700}
   #nrw-drawer .dh .cls{border:none;font-size:24px;line-height:1;color:var(--ink-soft,#888)}
-  #nrw-drawer .dh .gear{border:1px solid var(--line,#ccc);border-radius:8px;padding:4px 9px;font-size:14px;font-weight:700;cursor:pointer;background:none;color:var(--ink,#111)}
-  #nrw-drawer .nrw-set{display:none;flex-wrap:wrap;gap:8px 12px;padding:10px 16px;border-bottom:1px solid var(--line,#ddd);align-items:center}
-  #nrw-drawer .nrw-set.open{display:flex}
-  #nrw-drawer .nrw-set .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  #nrw-drawer .nrw-set .lbl{font-size:12px;color:var(--ink-soft,#888);font-weight:700}
-  #nrw-drawer .nrw-set .models{display:flex;flex-wrap:wrap;gap:6px}
-  #nrw-drawer .nrw-set .sb{border:1px solid var(--line,#ccc);border-radius:7px;padding:4px 10px;font-size:12.5px;font-weight:700;
+  #nrw-menu{position:fixed;top:50px;right:8px;z-index:2147483002;display:none;flex-direction:column;gap:11px;
+    padding:12px 14px;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--line,#ccc);border-radius:11px;
+    box-shadow:0 8px 28px rgba(0,0,0,.28);max-width:82vw;
+    font-family:var(--sans,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Heiti SC",sans-serif)}
+  #nrw-menu.open{display:flex}
+  #nrw-menu .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  #nrw-menu .lbl{font-size:12px;color:var(--ink-soft,#888);font-weight:700;min-width:2.4em}
+  #nrw-menu .models{display:flex;flex-wrap:wrap;gap:6px}
+  #nrw-menu .sb{border:1px solid var(--line,#ccc);border-radius:7px;padding:5px 11px;font-size:12.5px;font-weight:700;
     cursor:pointer;background:var(--panel,#fff);color:var(--ink,#111);text-decoration:none;touch-action:manipulation}
-  #nrw-drawer .nrw-set .sb.on{background:var(--ink,#111);color:var(--panel,#fff);border-color:var(--ink,#111)}
+  #nrw-menu .sb.on{background:var(--ink,#111);color:var(--panel,#fff);border-color:var(--ink,#111)}
   #nrw-drawer .db{padding:16px;overflow-y:auto;flex:1}
   #nrw-drawer .sel{border:1px solid var(--line,#ccc);border-radius:8px;padding:10px 13px;margin-bottom:14px;
     font-size:var(--nrw-fs);line-height:1.55;color:var(--ink-soft,#555);max-height:34vh;overflow:auto}
@@ -94,7 +96,7 @@
   .nrw-mk.ready{background:#dc2626}                                               /* red   = 可点看 */
   `;
 
-  let pop, drawer, thread, selBox, input, sendBtn;
+  let pop, drawer, thread, selBox, input, sendBtn, menuEl;
   let payload = {}, pendingRange = null, active = null;
   const isMobile = () => window.matchMedia('(max-width:640px)').matches;
   const isOpen = () => drawer && drawer.classList.contains('open');
@@ -124,7 +126,7 @@
   const modelName = () => localStorage.getItem('nrw_model') || '';
   let _models = null;
   async function buildModels() {
-    const box = drawer.querySelector('.models');
+    const box = menuEl.querySelector('.models');
     if (!_models) {
       box.textContent = '…';
       try {
@@ -157,7 +159,7 @@
   }
   function markTheme() {
     const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    if (drawer) drawer.querySelectorAll('.tb').forEach(b => b.classList.toggle('on', b.dataset.t === cur));
+    if (menuEl) menuEl.querySelectorAll('.tb').forEach(b => b.classList.toggle('on', b.dataset.t === cur));
   }
 
   function ensureDOM() {
@@ -179,28 +181,28 @@
     drawer = document.createElement('aside'); drawer.id = 'nrw-drawer';
     drawer.innerHTML =
       '<div class="dh"><div class="t">✨ 解读</div>' +
-      '<button class="gear" title="设置">⚙</button>' +
       '<button class="cls" title="关闭">×</button></div>' +
-      '<div class="nrw-set">' +
-        '<div class="grp"><span class="lbl">模型</span><span class="models"></span></div>' +
-        '<div class="grp"><span class="lbl">字号</span><button class="sb" data-d="-1">A−</button><button class="sb" data-d="1">A+</button></div>' +
-        '<div class="grp"><span class="lbl">显示</span><button class="sb tb" data-t="light">☀︎ 浅色</button><button class="sb tb" data-t="dark">☾ 深色</button></div>' +
-        '<div class="grp"><a class="sb" href="/reader/?list=1" target="_blank" rel="noopener">📚 待读列表</a></div>' +
-      '</div>' +
       '<div class="db"><div class="sel"></div><div class="thread"></div></div>' +
       '<div class="df"><input type="text" placeholder="追问… （回车发送）" autocomplete="off"><button class="send">发送</button></div>';
     document.body.appendChild(drawer);
+
+    // page-level settings dropdown (opened by each page's ⚙ button via Interpret.settings())
+    menuEl = document.createElement('div'); menuEl.id = 'nrw-menu';
+    menuEl.innerHTML =
+      '<div class="grp"><span class="lbl">模型</span><span class="models"></span></div>' +
+      '<div class="grp"><span class="lbl">字号</span><button class="sb" data-d="-1">A−</button><button class="sb" data-d="1">A+</button></div>' +
+      '<div class="grp"><span class="lbl">显示</span><button class="sb tb" data-t="light">☀︎ 浅色</button><button class="sb tb" data-t="dark">☾ 深色</button></div>' +
+      '<div class="grp"><a class="sb" href="/reader/?list=1" target="_blank" rel="noopener">📚 待读列表</a></div>';
+    document.body.appendChild(menuEl);
 
     selBox = drawer.querySelector('.sel');
     thread = drawer.querySelector('.thread');
     input = drawer.querySelector('.df input');
     sendBtn = drawer.querySelector('.df .send');
-    const setBox = drawer.querySelector('.nrw-set');
     drawer.querySelector('.cls').onclick = close;
-    drawer.querySelector('.gear').onclick = (e) => { e.stopPropagation(); setBox.classList.toggle('open'); if (setBox.classList.contains('open')) { buildModels(); markTheme(); } };
-    setBox.querySelectorAll('.sb[data-d]').forEach(b => b.onclick = () => bumpFont(+b.dataset.d));
-    setBox.querySelectorAll('.tb').forEach(b => b.onclick = () => setTheme(b.dataset.t));
-    drawer.querySelector('.db').addEventListener('mousedown', () => setBox.classList.remove('open'));
+    menuEl.querySelectorAll('.sb[data-d]').forEach(b => b.onclick = () => bumpFont(+b.dataset.d));
+    menuEl.querySelectorAll('.tb').forEach(b => b.onclick = () => setTheme(b.dataset.t));
+    document.addEventListener('mousedown', (e) => { if (menuEl.classList.contains('open') && !menuEl.contains(e.target) && !(e.target.closest && e.target.closest('.nrw-gear'))) menuEl.classList.remove('open'); });
     sendBtn.onclick = () => { if (active && active.streaming) { active.abort && active.abort.abort(); } else followup(); };
     input.onkeydown = (e) => {
       // ignore Enter while an IME (e.g. Chinese pinyin) is still composing —
@@ -370,5 +372,7 @@
     }
   }
 
-  window.Interpret = { popupAt, open, hidePopup, close };
+  function settings() { ensureDOM(); const o = menuEl.classList.toggle('open'); if (o) { buildModels(); markTheme(); } }
+  window.Interpret = { popupAt, open, hidePopup, close, settings };
+  if (document.body) ensureDOM(); else document.addEventListener('DOMContentLoaded', ensureDOM);
 })();

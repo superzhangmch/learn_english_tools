@@ -213,7 +213,7 @@
     .brand { display: none; }                 /* save room on small screens */
     #url { flex: 1 1 100%; order: 1; font-size: 16px; }  /* 16px avoids iOS zoom-on-focus */
     #go { order: 2; }
-    #listBtn, #refresh, #fsDown, #fsUp { order: 3; }
+    #refresh, #gear { order: 3; }
     #go, .fs { padding: 9px 12px; }
     main { padding: 22px 16px 140px; }
     .meta h1 { font-size: 24px; }
@@ -239,11 +239,8 @@
     <div class="bar">
       <input id="url" type="url" placeholder="粘贴一个新闻链接，回车打开阅读模式…" autocomplete="off" />
       <button id="go">打开</button>
-      <button id="listBtn" class="fs" title="阅读列表">📚</button>
-      <button id="themeBtn" class="fs" title="日间/夜间">🌙</button>
       <button id="refresh" class="fs" title="忽略缓存，重新抓取">↻</button>
-      <button id="fsDown" class="fs" title="缩小字号">A−</button>
-      <button id="fsUp" class="fs" title="放大字号">A+</button>
+      <button id="gear" class="fs nrw-gear" title="设置（模型 / 字号 / 显示 / 待读列表）">⚙</button>
     </div>
   </header>
 
@@ -255,7 +252,7 @@
   </main>
 
 
-<script src="/static/interpret-widget.js?v=20260810c"></script>
+<script src="/static/interpret-widget.js?v=20260810e"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const main = $('#main'), urlInput = $('#url'), goBtn = $('#go');
@@ -274,8 +271,7 @@ function makeFs(cssVar, storeKey, dflt){
   return { get, set };
 }
 const artFs = makeFs('--art-fs', 'nr_art_fs', '19');
-$('#fsUp').onclick   = () => artFs.set(artFs.get() + 1);
-$('#fsDown').onclick = () => artFs.set(artFs.get() - 1);
+$('#gear').onclick = () => window.Interpret && Interpret.settings();   // model / font / theme
 
 // ---- tiny markdown renderer (safe-ish: escape then apply inline/block) ----
 function mdToHtml(md) {
@@ -368,8 +364,7 @@ goBtn.onclick = () => { const u = urlInput.value.trim(); if (u) loadArticle(u); 
 urlInput.onkeydown = (e) => { if (e.key === 'Enter') goBtn.onclick(); };
 $('#refresh').onclick = () => { const u = (urlInput.value.trim() || currentUrl); if (u) loadArticle(u, true); };
 
-// ---- reading list ----
-$('#listBtn').onclick = showList;
+// ---- reading list (opened from the ⚙ menu's 待读列表 entry) ----
 function fmtTime(sec){
   if (!sec) return '';
   const d = new Date(sec * 1000);
@@ -531,19 +526,14 @@ window.addEventListener('scroll', () => {
 // ---- display mode (light/dark) ----
 // Precedence: &t= handed over by the news list  >  this origin's saved choice  >  OS.
 // The news list is a different page, so localStorage can't be shared — hence the hash param.
+// apply theme on load (toggle now lives in the ⚙ settings menu)
 (function(){
-  const KEY = 'nrw_theme', btn = document.getElementById('themeBtn');
+  const KEY = 'nrw_theme';
   let handoff = new URLSearchParams(location.search).get('t');   // ?t= from the news list
   if (handoff !== 'dark' && handoff !== 'light') handoff = (location.hash.match(/[#&]t=(dark|light)/) || [])[1];
   const osDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-  function apply(t, persist) {
-    document.documentElement.dataset.theme = t;
-    if (persist) localStorage.setItem(KEY, t);
-    btn.textContent = t === 'dark' ? '☀️' : '🌙';   // shows what tapping switches TO
-  }
   if (handoff) localStorage.setItem(KEY, handoff);
-  apply(handoff || localStorage.getItem(KEY) || (osDark() ? 'dark' : 'light'), false);
-  btn.onclick = () => apply(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  document.documentElement.dataset.theme = handoff || localStorage.getItem(KEY) || (osDark() ? 'dark' : 'light');
 })();
 
 // ---- restore from ?u= query (robust across browsers) or legacy #u= hash ----

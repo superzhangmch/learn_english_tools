@@ -56,17 +56,15 @@
 <body>
   <header>
     <h1>📰 News</h1>
-    <button id="theme" class="hb" title="日间/夜间">🌙</button>
-    <button id="fsdown" class="hb" title="字号缩小">A−</button>
-    <button id="fsup" class="hb" title="字号放大">A+</button>
     <button id="refresh" class="hb" title="刷新">↻</button>
+    <button id="gear" class="hb nrw-gear" title="设置（模型 / 字号 / 显示模式）">⚙</button>
   </header>
   <ul id="list"></ul>
   <div class="status" id="status">加载中…</div>
 
   <!-- only the interpret widget is loaded from the reader; no weather/radar/calendar traffic -->
   <script>window.INTERPRET_BASE = '';</script>
-  <script src="/static/interpret-widget.js?v=20260810c"></script>
+  <script src="/static/interpret-widget.js?v=20260810e"></script>
   <script>
   const $ = s => document.querySelector(s), list = $('#list'), status = $('#status');
   let items = [];
@@ -77,23 +75,18 @@
   const fsGet = () => Math.max(FMIN, Math.min(FMAX, parseInt(localStorage.getItem(FS_KEY) || '17', 10)));
   const fsSet = px => { px = Math.max(FMIN, Math.min(FMAX, px)); localStorage.setItem(FS_KEY, px); document.documentElement.style.setProperty('--nfs', px + 'px'); };
   fsSet(fsGet());
-  $('#fsup').onclick = () => fsSet(fsGet() + 1);
-  $('#fsdown').onclick = () => fsSet(fsGet() - 1);
 
-  // display mode: explicit choice wins, otherwise follow the OS on first visit
+  // display mode: font size + light/dark now live in the shared ⚙ menu (Interpret.settings).
+  // Here we only apply the saved/OS theme on load; the gear writes news_theme and flips
+  // data-theme live, so no toggle button is needed on this page anymore.
   const TH_KEY = 'news_theme';
-  const thGet = () => localStorage.getItem(TH_KEY)
+  const th0 = localStorage.getItem(TH_KEY)
     || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  function thSet(t, persist) {
-    document.documentElement.dataset.theme = t;
-    if (persist) localStorage.setItem(TH_KEY, t);
-    $('#theme').textContent = t === 'dark' ? '☀️' : '🌙';   // shows what tapping switches TO
-    const m = document.querySelector('meta[name=theme-color]');
-    if (m) m.content = t === 'dark' ? '#121212' : '#ffffff';
-    if (items.length) render();   // read links carry the theme across to the reader
-  }
-  thSet(thGet(), false);
-  $('#theme').onclick = () => thSet(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  document.documentElement.dataset.theme = th0;
+  const _m = document.querySelector('meta[name=theme-color]');
+  if (_m) _m.content = th0 === 'dark' ? '#121212' : '#ffffff';
+
+  $('#gear').onclick = () => window.Interpret && Interpret.settings();
 
   async function load(refresh) {
     status.style.display = 'block';
@@ -116,7 +109,7 @@
         `<span class="ti">${esc(it.title)}</span> ` +
         (it.date ? ` <span class="date">${esc(it.date)}</span>` : '') +
         '<span class="btns">' +
-          (it.link ? `<a class="go" href="/reader/?u=${encodeURIComponent(it.link)}&t=${document.documentElement.dataset.theme || 'light'}" target="_blank" rel="noopener">read</a>` : '') +
+          (it.link ? `<a class="go" href="/reader/?u=${encodeURIComponent(it.link)}" target="_blank" rel="noopener">read</a>` : '') +
           `<span class="x" data-k="${encodeURIComponent(it.link || it.title)}" title="删除">del</span>` +
         '</span>' +
       '</li>').join('');
