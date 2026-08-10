@@ -190,6 +190,7 @@ class InterpretReq(BaseModel):
     text: str
     context: str = ""
     title: str = ""
+    mode: str = "interpret"   # "interpret" (default) or "grammar"
     history: list[Msg] = []  # follow-up turns after the initial interpretation
 
 
@@ -220,19 +221,49 @@ SYSTEM_PROMPT = (
     "用户若追问，再展开细讲；首次解读一律从简。选中的若是中文，则反过来给地道英文表达。"
 )
 
+# rule-triggered when the selection is a SINGLE word — force the full format
+SINGLE_WORD_RULE = (
+    "【本次选中的是单个单词——硬性格式要求，四项一个都不能少，即使是最常见的词】\n"
+    "① **音标**：给 IPA（英式或美式均可）。\n"
+    "② **此处意思**：结合本句语境的确切含义 + 地道中文翻译。\n"
+    "③ **词源**：词根/词缀、来自哪门语言、本义如何演变到今义。\n"
+    "④ **本句**：这个词所在那句话的中文大意。\n"
+    "即使是 house、important、the 这类词，①②③④ 也全部要给，绝不省略音标或词源。"
+)
+
+GRAMMAR_PROMPT = (
+    "你是英语语法老师。用户在读英文新闻，选中了一句话或一个片段，想弄懂它的**语法结构和整体意思**。"
+    "用中文讲，精炼有条理、别啰嗦，重点在讲清结构：\n"
+    "① **整句意思**：先给一句流畅的中文译文。\n"
+    "② **结构拆解**：主干（主语/谓语/宾语）是什么；有哪些从句、非谓语、插入语、倒装、省略，分别修饰或充当什么；"
+    "时态、语态、指代、连接词的作用；把造成理解困难的语法点逐一点破。\n"
+    "③ **关键词组**：挑出值得注意的固定搭配 / 短语动词 / 习惯用法（有才写）。\n"
+    "分析对象以 surrounding context（完整句子）为准；若选中的只是片段，就针对它所在的那**整句**分析。"
+    "用少量 Markdown 加粗/短列表组织，但别写成长篇。"
+)
+
 
 def _build_messages(req: InterpretReq):
-    user = f"Selected text:\n\"\"\"\n{req.text.strip()}\n\"\"\"\n"
+    text = req.text.strip()
+    if req.mode == "grammar":
+        system = GRAMMAR_PROMPT
+        tail = "\nAnalyze the grammar and overall meaning of the sentence (the surrounding context is the sentence)."
+    else:
+        system = SYSTEM_PROMPT
+        if re.fullmatch(r"[A-Za-z][A-Za-z'’.\-]*", text):   # single English word → strict format
+            system = SYSTEM_PROMPT + "\n\n" + SINGLE_WORD_RULE
+        tail = "\nInterpret the selected text."
+    user = f"Selected text:\n\"\"\"\n{text}\n\"\"\"\n"
     if req.title:
         user += f"\nArticle title: {req.title}\n"
     if req.context:
         ctx = req.context.strip()
         if len(ctx) > 1500:
             ctx = ctx[:1500] + "…"
-        user += f"\nSurrounding context (for disambiguation only):\n\"\"\"\n{ctx}\n\"\"\"\n"
-    user += "\nInterpret the selected text."
+        user += f"\nSurrounding context:\n\"\"\"\n{ctx}\n\"\"\"\n"
+    user += tail
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
     # follow-up turns (assistant reply, then user question, ...)

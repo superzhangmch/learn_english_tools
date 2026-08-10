@@ -21,8 +21,10 @@
   const CSS = `
   .nrw-pop{position:fixed;display:none;z-index:2147483000;transform:translate(-50%,-100%);
     background:var(--panel,#fff);color:var(--ink,#111);border:1.5px solid var(--ink,#111);border-radius:8px;
-    padding:7px 14px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.15);
-    font-family:var(--sans,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Heiti SC",sans-serif);touch-action:manipulation}
+    font-size:14px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.15);overflow:hidden;
+    font-family:var(--sans,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Heiti SC",sans-serif)}
+  .nrw-pop .nrw-b{display:inline-block;padding:7px 14px;cursor:pointer;touch-action:manipulation}
+  .nrw-pop .nrw-b+.nrw-b{border-left:1.5px solid var(--ink,#111)}
   .nrw-pop.below{transform:translate(-50%,0)}
   .nrw-pop::after{content:"";position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);
     border:5px solid transparent;border-top-color:var(--ink,#111);border-bottom:none}
@@ -113,13 +115,16 @@
     if (drawer) return;
     const st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
 
-    pop = document.createElement('div'); pop.className = 'nrw-pop'; pop.textContent = '✨ 解读';
-    pop.onclick = () => {
+    pop = document.createElement('div'); pop.className = 'nrw-pop';
+    pop.innerHTML = '<span class="nrw-b" data-m="interpret">✨ 解读</span>' +
+                    '<span class="nrw-b" data-m="grammar">语法</span>';
+    pop.addEventListener('click', (e) => {
+      const b = e.target.closest('.nrw-b'); if (!b) return;
       hidePopup();
       // mobile: always background (marker), tap to view. desktop: open immediately,
       // UNLESS a drawer is already showing — then background so it isn't disrupted.
-      open(payload, isMobile() || isOpen());
-    };
+      open(payload, isMobile() || isOpen(), b.dataset.m);
+    });
     document.body.appendChild(pop);
 
     drawer = document.createElement('aside'); drawer.id = 'nrw-drawer';
@@ -236,22 +241,23 @@
     } catch (_) { document.body.appendChild(mk); }
     return mk;
   }
+  function setTitle(s) { const t = drawer.querySelector('.dh .t'); if (t) t.textContent = s.mode === 'grammar' ? '语法分析' : '✨ 解读'; }
   function openSession(s) {
-    active = s; markMarker(s, 'ready');
+    active = s; markMarker(s, 'ready'); setTitle(s);
     renderContext(s); renderThread(s); setBusy(!!s.streaming);
     drawer.classList.add('open');
   }
 
-  // deferred=true (mobile): drop an inline marker + interpret in the background
-  // (reading isn't interrupted); tap that marker to expand its own result/chat.
-  function open(pl, deferred) {
+  // mode: 'interpret' (default) or 'grammar'. deferred=true (mobile): drop an inline
+  // marker + run in the background (reading isn't interrupted); tap it to view.
+  function open(pl, deferred, mode) {
     ensureDOM();
-    const s = { payload: pl || {}, convo: [], turns: [], marker: null, abort: null, streaming: false };
+    const s = { payload: pl || {}, mode: mode || 'interpret', convo: [], turns: [], marker: null, abort: null, streaming: false };
     s.marker = makeMarker(s);   // always drop a marker so you can revisit this spot
     if (deferred) {
       runTurn(s);               // background — click the marker to view it
     } else {
-      active = s; renderContext(s); thread.innerHTML = ''; input.value = '';
+      active = s; setTitle(s); renderContext(s); thread.innerHTML = ''; input.value = '';
       drawer.classList.add('open'); runTurn(s);
     }
   }
@@ -276,7 +282,7 @@
     try {
       const r = await fetch(BASE + '/api/interpret', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: s.payload.text, context: s.payload.context || s.payload.title || '', title: s.payload.title || '', history: s.convo }),
+        body: JSON.stringify({ text: s.payload.text, context: s.payload.context || s.payload.title || '', title: s.payload.title || '', mode: s.mode || 'interpret', history: s.convo }),
         signal: s.abort.signal,
       });
       if (!r.ok) throw new Error('服务返回 HTTP ' + r.status);
