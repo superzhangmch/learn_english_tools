@@ -52,12 +52,17 @@
   #nrw-drawer .turn.a ul{padding-left:1.3em;margin:.5em 0}
   #nrw-drawer .turn.a code{background:var(--accent-soft,#eee);padding:1px 5px;border-radius:4px;font-size:.9em}
   #nrw-drawer .think{color:var(--ink-soft,#888);font-size:14px}
+  #nrw-drawer .nrw-err{color:#c0392b;font-size:var(--nrw-fs)}
+  #nrw-drawer .nrw-retry{margin-top:10px;padding:6px 16px;border:1.5px solid var(--ink,#111);border-radius:8px;
+    background:var(--panel,#fff);color:var(--ink,#111);font-weight:700;cursor:pointer;font-family:inherit;touch-action:manipulation}
   #nrw-drawer .df{border-top:1px solid var(--line,#ddd);padding:12px 14px;display:flex;gap:8px}
   #nrw-drawer .df input{flex:1;padding:9px 12px;border:1px solid var(--line,#ccc);border-radius:9px;
     background:var(--bg,#fff);color:var(--ink,#111);font-size:16px;outline:none;font-family:inherit}
-  #nrw-drawer .df button{padding:9px 14px;border:1.5px solid var(--accent,#111);border-radius:9px;
-    background:var(--accent,#111);color:var(--panel,#fff);font-weight:600;cursor:pointer;font-family:inherit;touch-action:manipulation}
-  #nrw-drawer .df button.stop{background:var(--panel,#fff);color:var(--accent,#111)}
+  /* send button uses --ink/--panel (defined in every theme) so it's high-contrast
+     in BOTH light and dark — don't rely on --accent (undefined on some pages) */
+  #nrw-drawer .df button{padding:9px 14px;border:1.5px solid var(--ink,#111);border-radius:9px;
+    background:var(--ink,#111);color:var(--panel,#fff);font-weight:700;cursor:pointer;font-family:inherit;touch-action:manipulation}
+  #nrw-drawer .df button.stop{background:var(--panel,#fff);color:var(--ink,#111)}
   @media (max-width:640px){
     #nrw-drawer{top:auto;bottom:0;left:0;right:0;width:100%;height:74%;border-left:none;
       border-top:2px solid var(--line,#000);border-radius:16px 16px 0 0;transform:translateY(100%);box-shadow:0 -8px 30px rgba(0,0,0,.18)}
@@ -203,8 +208,17 @@
   function renderThread(s) {
     thread.innerHTML = '';
     s.turns.forEach(t => {
-      if ('q' in t) addTurn('q').textContent = t.q;
-      else addTurn('a').innerHTML = t.a ? md(t.a) : '<div class="think">正在解读…</div>';
+      if ('q' in t) { addTurn('q').textContent = t.q; return; }
+      const el = addTurn('a');
+      if (t.err) {                       // failed turn → error + a Retry button
+        el.innerHTML = '<div class="nrw-err">出错：' + esc(t.err) + '</div>';
+        const b = document.createElement('button');
+        b.className = 'nrw-retry'; b.textContent = '重试';
+        b.onclick = () => runTurn(s, t);
+        el.appendChild(b);
+      } else {
+        el.innerHTML = t.a ? md(t.a) : '<div class="think">正在解读…</div>';
+      }
     });
     const last = thread.lastElementChild; if (last) last.scrollIntoView({ block: 'end' });
   }
@@ -249,10 +263,13 @@
     renderThread(active); runTurn(active);
   }
 
-  async function runTurn(s) {
+  // `existing` = re-run this turn in place (the Retry button); else append a new turn
+  async function runTurn(s, existing) {
     if (s.abort) s.abort.abort();
     s.abort = new AbortController(); s.streaming = true; markMarker(s, 'busy');
-    const turn = { a: '' }; s.turns.push(turn);
+    const turn = existing || { a: '' };
+    if (!existing) s.turns.push(turn);
+    turn.err = null; turn.a = '';        // reset (clears a prior error on retry)
     if (s === active && isOpen()) { renderThread(s); setBusy(true); }
     let acc = '';
     const paint = () => { if (s === active && isOpen()) { const el = thread.querySelector('.turn.a:last-child'); if (el) { el.innerHTML = md(acc); el.scrollIntoView({ block: 'end' }); } } };
@@ -262,6 +279,7 @@
         body: JSON.stringify({ text: s.payload.text, context: s.payload.context || s.payload.title || '', title: s.payload.title || '', history: s.convo }),
         signal: s.abort.signal,
       });
+      if (!r.ok) throw new Error('服务返回 HTTP ' + r.status);
       const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
       while (true) {
         const { value, done } = await rd.read(); if (done) break;
@@ -270,14 +288,18 @@
         for (const pt of parts) {
           const line = pt.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
           let o; try { o = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
-          if (o.error) { turn.a = '出错：' + o.error; paint(); break; }
+          if (o.error) { turn.err = o.error; break; }
           if (o.delta) { acc += o.delta; turn.a = acc; if (STREAM) paint(); }
         }
+        if (turn.err) break;
       }
-      if (acc.trim()) s.convo.push({ role: 'assistant', content: acc });
+      if (!turn.err) {
+        if (acc.trim()) { turn.a = acc; s.convo.push({ role: 'assistant', content: acc }); }
+        else turn.a = '（无内容）';
+      }
     } catch (e) {
       if (e.name === 'AbortError') { turn.a = acc + (acc.trim() ? '  （已停止）' : '已停止'); if (acc.trim()) s.convo.push({ role: 'assistant', content: acc }); }
-      else turn.a = '请求失败：' + e.message;
+      else turn.err = e.message || String(e);   // → renderThread shows error + Retry
     } finally {
       s.streaming = false; markMarker(s, 'ready');
       if (s === active && isOpen()) { renderThread(s); setBusy(false); }
