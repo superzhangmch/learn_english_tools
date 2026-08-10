@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Clock</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">   <!-- stop iOS dark mode from turning inputs black -->
+<style>
+  /* e-ink: pure black/white only, no grays, no animation */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #fff; overflow: hidden; }
+  body {
+    font-family: "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif;
+    color: #000;
+    /* 布局:  时间 | 天气 | 云图
+             新闻(占两列)  | 日历  */
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 3vh 2vw;
+    padding: 3vh 3vw;
+    align-items: center; justify-items: center;
+  }
+  body.idle, body.idle * { cursor: none; }
+
+  /* ---- cell 1: 时间 ---- */
+  #main { text-align: center; }
+  #clock {
+    /* 比天气区最大字号(w-now 3.8vw)略大一档 */
+    font-size: clamp(38px, 4.4vw, 70px);
+    font-weight: 500; letter-spacing: 0.03em;
+    font-variant-numeric: tabular-nums; line-height: 1.05;
+  }
+  #date {
+    margin-top: 14px; font-size: clamp(20px, 2.4vw, 40px);
+    font-weight: 500; letter-spacing: 0.1em;
+  }
+
+  /* ---- cell 2: 天气 ---- */
+  #weather { text-align: center; }
+  #w-now { font-size: clamp(22px, 2.5vw, 38px); font-weight: 500; }
+  #w-sub {
+    margin-top: 8px; font-size: clamp(15px, 1.6vw, 24px);
+    font-weight: 400; letter-spacing: 0.06em; line-height: 1.6;
+  }
+  #w-advice, #w-rain {
+    margin-top: 8px; font-size: clamp(16px, 1.7vw, 26px);
+    font-weight: 700; letter-spacing: 0.06em;
+  }
+  #w-advice:empty, #w-rain:empty { display: none; }
+  #w-hours {
+    display: flex; gap: 0.3em; margin-top: 14px; justify-content: center;
+    font-size: clamp(12px, 1.2vw, 18px); font-weight: 400;
+  }
+  #w-hours .hr { text-align: center; width: 3em; line-height: 1.7; }
+  #w-hours .hr b { font-weight: 600; }
+  #w-hours .hr .pp { font-size: 0.85em; }
+
+  /* ---- cell 3: 云图(雷达): 效果不好就注释掉HTML里的#radar-box ---- */
+  #radar-box {
+    width: 100%; max-width: 620px; aspect-ratio: 1 / 0.9;
+    overflow: hidden; position: relative;
+    border: 1px solid #000;
+  }
+  /* 裁切到华北(北京居中)。想看全国: 改成 width:100%; left:0; top:0 */
+  #radar-box img {
+    position: absolute; width: 260%; left: -136%; top: -44%;
+  }
+  #radar-box::before {           /* shows until the (opaque) image covers it */
+    content: 'loading radar…';
+    position: absolute; inset: 0; z-index: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: clamp(14px, 1.4vw, 20px);
+  }
+  #radar-box img { z-index: 1; }
+  #radar-bar {
+    position: absolute; top: 0; left: 0; z-index: 2;
+    background: #fff; border: 1px solid #000; border-top: 0; border-left: 0;
+    padding: 0.1em 0.6em; display: flex; gap: 0.7em; align-items: center;
+    font-size: clamp(13px, 1.2vw, 18px);
+  }
+  #radar-btn { cursor: pointer; font-weight: 700; user-select: none; }
+  #radar-tag:empty { display: none; }
+
+  /* ---- cell 4: 新闻(占两列) ---- */
+  #news {
+    grid-column: 1 / 3; align-self: center;
+    width: 100%; padding-left: 2vw;
+  }
+  #news ul {
+    list-style: none;
+    font-size: clamp(16px, 1.9vw, 28px); font-weight: 400;
+  }
+  #news li {
+    line-height: 1.5; margin-bottom: 0.7em;
+    padding-left: 2.4em; text-indent: -2.4em;  /* 换行后与标题对齐(悬挂缩进) */
+  }
+  #news li:last-child { margin-bottom: 0; }
+  #news a { color: inherit; text-decoration: none; }
+  #news a:hover { text-decoration: underline; }
+  #news .src {
+    font-size: 0.72em; font-weight: 700; letter-spacing: 0.1em;
+    margin-right: 0.8em; vertical-align: 0.1em;
+  }
+  #news .date {
+    font-size: 0.72em; margin-left: 0.8em; letter-spacing: 0.05em;
+  }
+  #news .x {
+    font-size: 0.8em; font-weight: 700; margin-left: 0.9em;
+    cursor: pointer; user-select: none; padding: 0 0.3em;
+  }
+  #news .ti { user-select: text; }   /* titles are plain selectable text now */
+  #news .go {
+    font-size: 0.66em; font-weight: 700; margin-left: 0.7em; letter-spacing: 0.05em;
+    cursor: pointer; user-select: none; border: 1px solid #000; border-radius: 4px;
+    padding: 0 0.45em; white-space: nowrap; vertical-align: 0.12em;
+  }
+  #news-nav {
+    margin-top: 0.6em; padding-left: 2.4em;
+    font-size: clamp(14px, 1.4vw, 20px);
+  }
+  #news-nav .nav { padding: 0 0.9em; font-weight: 600; cursor: pointer; user-select: none; }
+  #news-nav #news-pg { letter-spacing: 0.1em; }
+
+  /* ---- 数据更新时间戳(右下角) ---- */
+  #stamp {
+    position: fixed; right: 0.8vw; bottom: 0.6vh;
+    font-size: clamp(11px, 0.95vw, 15px); font-weight: 400;
+    letter-spacing: 0.04em;
+  }
+
+  /* ---- cell 5: 日历 ---- */
+  #cal-box { align-self: center; }
+  #cal {
+    border-collapse: collapse;
+    font-size: clamp(15px, 1.7vw, 24px); font-weight: 400;
+  }
+  #cal caption { letter-spacing: 0.15em; padding-bottom: 0.45em; font-size: 1.05em; }
+  #cal caption .nav {
+    padding: 0 0.7em; font-weight: 600; cursor: pointer; user-select: none;
+  }
+  #cal caption .cur { cursor: pointer; }
+  #cal th { font-weight: 600; padding: 0.15em 0; }
+  #cal td { text-align: center; width: 2.7em; padding: 0.08em 0; vertical-align: top; }
+  #cal td .d {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.7em; height: 1.7em;
+  }
+  #cal td.today .d {
+    border-radius: 50%; background: #000; color: #fff; font-weight: 700;
+  }
+  #cal td .lu { font-size: 0.58em; line-height: 1.05; }
+</style>
+</head>
+<body>
+  <!-- 行1: 时间 | 天气 | 云图 -->
+  <div id="main">
+    <div id="clock">--:--</div>
+    <div id="date"></div>
+  </div>
+
+  <div id="weather">
+    <div id="w-now"></div>
+    <div id="w-sub"></div>
+    <div id="w-advice"></div>
+    <div id="w-rain"></div>
+    <div id="w-hours"></div>
+  </div>
+
+  <div id="cal-box"><table id="cal"></table></div>
+
+  <div id="stamp"></div>
+
+  <!-- 行2: 新闻(占两列) | 云图 -->
+  <div id="news">
+    <ul id="news-list"></ul>
+    <div id="news-nav">
+      <span class="nav" onclick="newsPage(-1)">‹</span>
+      <span id="news-pg"></span>
+      <span class="nav" onclick="newsPage(1)">›</span>
+    </div>
+  </div>
+
+  <div id="radar-box">
+    <img id="radar-img" src="/radar" alt="">
+    <div id="radar-bar">
+      <span id="radar-btn" onclick="radarToggle()">▶</span>
+      <span id="radar-tag"></span>
+    </div>
+  </div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.js"></script>
+<script>window.INTERPRET_BASE='';window.INTERPRET_STREAM=false;</script>
+<script src="/static/interpret-widget.js?v=20260808a"></script>
+<script>
+const $ = id => document.getElementById(id);
+let shownMinute = -1, shownDay = -1;
+
+// e-ink: touch the DOM only when displayed content actually changes
+function tick() {
+  const d = new Date();
+  if (d.getMinutes() === shownMinute) return;
+  shownMinute = d.getMinutes();
+  const p = n => String(n).padStart(2, '0');
+  $('clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (d.getDate() !== shownDay) {
+    shownDay = d.getDate();
+    renderDate(d);
+    calToday();   // reset calendar view to the current month
+  }
+}
+
+function renderDate(d) {
+  $('date').textContent =
+    d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) +
+    ' · ' + d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+let viewY, viewM;      // month currently shown in the calendar
+let snapBackTimer;
+
+function lunarLabel(y, m, d) {   // 节气 > 初一显示月名 > 农历日
+  try {
+    const lunar = Solar.fromYmd(y, m + 1, d).getLunar();
+    const jq = lunar.getJieQi();
+    if (jq) return jq;
+    if (lunar.getDay() === 1) return lunar.getMonthInChinese() + '月';
+    return lunar.getDayInChinese();
+  } catch (e) { return ''; }
+}
+
+function renderCalendar() {
+  const today = new Date();
+  const y = viewY, m = viewM;
+  const isCur = y === today.getFullYear() && m === today.getMonth();
+  const first = new Date(y, m, 1).getDay();        // weekday of the 1st (0=Sun)
+  const days = new Date(y, m + 1, 0).getDate();
+  const title = new Date(y, m).toLocaleString('en-US', { month: 'short' }) + ' ' + y;
+  let html =
+    `<caption><span class="nav" onclick="navMonth(-1)">‹</span>` +
+    `<span class="cur" onclick="calToday()">${title}</span>` +
+    `<span class="nav" onclick="navMonth(1)">›</span></caption><tr>` +
+    ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(w => `<th>${w}</th>`).join('') + '</tr>';
+  let day = 1 - first;
+  while (day <= days) {
+    html += '<tr>';
+    for (let i = 0; i < 7; i++, day++) {
+      if (day < 1 || day > days) { html += '<td></td>'; continue; }
+      const cls = (isCur && day === today.getDate()) ? ' class="today"' : '';
+      html += `<td${cls}><div class="d"><span>${day}</span></div>` +
+              `<div class="lu">${lunarLabel(y, m, day)}</div></td>`;
+    }
+    html += '</tr>';
+  }
+  $('cal').innerHTML = html;
+}
+
+function navMonth(delta) {
+  viewM += delta;
+  if (viewM < 0)  { viewM = 11; viewY--; }
+  if (viewM > 11) { viewM = 0;  viewY++; }
+  renderCalendar();
+  clearTimeout(snapBackTimer);           // auto return to current month after 5 min
+  snapBackTimer = setTimeout(calToday, 5 * 60 * 1000);
+}
+
+function calToday() {
+  clearTimeout(snapBackTimer);
+  const d = new Date();
+  viewY = d.getFullYear(); viewM = d.getMonth();
+  renderCalendar();
+}
+
+tick();
+setInterval(tick, 1000);
+
+// --- weather (WMO code -> text, no emoji for e-ink) ---
+const WMO = {
+  0:'Sunny',1:'Sunny',2:'Cloudy',3:'Overcast',45:'Fog',48:'Fog',
+  51:'Drizzle',53:'Drizzle',55:'Drizzle',56:'Frz rain',57:'Frz rain',
+  61:'Rain',63:'Rain',65:'Hvy rain',66:'Frz rain',67:'Frz rain',
+  71:'Snow',73:'Snow',75:'Hvy snow',77:'Snow',
+  80:'Showers',81:'Showers',82:'Showers',85:'Snow',86:'Snow',
+  95:'Thunder',96:'Hail',99:'Hail',
+};
+// 逐小时小格用中文, 两字宽度紧凑不重叠
+const WMO_CN = {
+  0:'晴',1:'晴',2:'多云',3:'阴',45:'雾',48:'雾',
+  51:'毛雨',53:'毛雨',55:'毛雨',56:'冻雨',57:'冻雨',
+  61:'小雨',63:'中雨',65:'大雨',66:'冻雨',67:'冻雨',
+  71:'小雪',73:'中雪',75:'大雪',77:'雪',
+  80:'阵雨',81:'阵雨',82:'阵雨',85:'阵雪',86:'阵雪',
+  95:'雷雨',96:'冰雹',99:'冰雹',
+};
+
+let lastNews = 0, lastWeather = 0, lastRadar = Date.now();
+
+async function loadWeather() {
+  try {
+    const r = await fetch('/weather');
+    const w = await r.json();
+    if (w.temp === undefined) return;
+    lastWeather = Date.now();
+    const now = `${WMO[w.code] || ''} ${w.temp}°`;
+    const uvLvl = v => v >= 11 ? 'Extreme' : v >= 8 ? 'Very high' : v >= 6 ? 'High'
+                     : v >= 3 ? 'Moderate' : 'Low';
+    const sub =
+      `Feels ${w.feels}° · Humidity ${w.humidity}%<br>` +
+      `UV ${uvLvl(w.uv)}(${w.uv}/${w.uv_max})` +
+      (w.pm25 != null ? ` · PM2.5 ${w.pm25}` : '') +
+      (w.o3 != null ? ` · O₃ ${w.o3}` : '') + `<br>` +
+      `${w.city} · ${w.tmin}°~${w.tmax}°`;
+    if ($('w-now').textContent !== now) $('w-now').textContent = now;
+    if ($('w-sub').innerHTML !== sub) $('w-sub').innerHTML = sub;
+    const rain = !w.rain ? ''
+      : w.rain.now ? 'Raining now'
+      : `Rain in ~${w.rain.in_min} min`;
+    if ($('w-rain').textContent !== rain) $('w-rain').textContent = rain;
+    const hours = (w.hours || []).map(x =>
+      `<div class="hr">${x.h}h<br><b>${x.t}°</b><br>` +
+      `<span class="pp">${x.pp >= 20 ? x.pp + '%' : (WMO_CN[x.code] || '')}</span></div>`
+    ).join('');
+    if ($('w-hours').innerHTML !== hours) $('w-hours').innerHTML = hours;
+  } catch (e) { /* keep old display */ }
+}
+
+// --- news: static list of N per page, manual paging + slow auto-advance ---
+const BATCH = 5;
+let items = [], page = 0;
+
+// pause auto page-rotation for 10 min after the user interacts with the list
+// (read / delete / 请教llm-selection / manual paging), so it won't flip away mid-use
+let rotatePausedUntil = 0;
+function pauseRotate() { rotatePausedUntil = Date.now() + 10 * 60 * 1000; }
+['pointerdown', 'mouseup'].forEach(ev => $('news').addEventListener(ev, pauseRotate));
+
+async function loadNews() {
+  try {
+    const r = await fetch('/news');
+    const data = await r.json();
+    if (data.items && data.items.length) {
+      items = data.items;
+      lastNews = Date.now();
+    }
+  } catch (e) { /* keep old items */ }
+}
+
+function showBatch() {
+  if (!items.length) {
+    $('news-list').innerHTML = '';
+    $('news-pg').textContent = '';
+    return;
+  }
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const pages = Math.ceil(items.length / BATCH);
+  page = ((page % pages) + pages) % pages;
+  const batch = items.slice(page * BATCH, page * BATCH + BATCH);
+  $('news-list').innerHTML = batch.map(it =>
+    `<li><span class="src">${it.source}</span> ` +
+    `<span class="ti">${esc(it.title)}</span>` +
+    (it.date ? ` <span class="date">${it.date}</span>` : '') +
+    (it.link ? ` <span class="go" data-link="${encodeURIComponent(it.link)}">阅读↗</span>` : '') +
+    ` <span class="x" data-k="${encodeURIComponent(it.link || it.title)}">✕</span>` +
+    '</li>').join('');
+  $('news-pg').textContent = `${page + 1} / ${pages}`;
+}
+
+function newsPage(delta) { page += delta; showBatch(); }
+
+// list clicks: ✕ dismiss, or 阅读↗ open in reader (titles themselves are plain text now)
+$('news-list').addEventListener('click', e => {
+  if (e.target.classList.contains('x')) {
+    const key = decodeURIComponent(e.target.dataset.k);
+    fetch('/dismiss', { method: 'POST', body: JSON.stringify({ key }) });
+    items = items.filter(it => (it.link || it.title) !== key);
+    e.target.closest('li').remove();   // drop only this row; re-paginate on the next page turn
+  } else if (e.target.classList.contains('go')) {
+    window.open('/reader/?u=' + e.target.dataset.link + '&t=' + (document.documentElement.dataset.theme || 'light'), '_blank', 'noopener');
+  }
+});
+
+// --- LLM 解读: select a word/phrase in a title -> shared widget (right drawer + chat) ---
+function nHandleSelect(e){
+  if (e.target.closest && e.target.closest('.nrw-pop')) return;
+  setTimeout(() => {
+    const sel = window.getSelection();
+    const text = sel.toString().trim();
+    if (!text) { window.Interpret && Interpret.hidePopup(); return; }
+    const a = sel.anchorNode, el = a ? (a.nodeType === 3 ? a.parentNode : a) : null;
+    const li = el && el.closest ? el.closest('#news li') : null;
+    if (!li) { window.Interpret && Interpret.hidePopup(); return; }
+    const ti = li.querySelector('.ti');
+    const title = (ti ? ti.textContent : li.textContent).trim();
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (window.Interpret) Interpret.popupAt(rect, { text, title, context: title }, true);  // below (e-ink/touch)
+  }, 10);
+}
+document.addEventListener('mouseup', nHandleSelect);
+document.addEventListener('touchend', nHandleSelect, { passive: true });
+
+// --- foreground-only scheduler ---
+// 页面在前台才发请求; 每分钟检查一次各数据是否过期(新闻拿不到时会自动重试)。
+// server 端本身是惰性抓取+缓存, 没有请求就不产生任何外部流量。
+const NEWS_TTL = 20 * 60 * 1000, WEATHER_TTL = 15 * 60 * 1000, RADAR_TTL = 10 * 60 * 1000;
+
+async function loadStatus() {   // server-side fetch times, proof data is flowing
+  try {
+    const s = await (await fetch('/status')).json();
+    const parts = [];
+    if (s.weather) parts.push('wx ' + s.weather);
+    if (s.news)    parts.push('news ' + s.news);
+    if (s.radar)   parts.push('radar ' + s.radar);
+    const text = parts.join(' · ');
+    if ($('stamp').textContent !== text) $('stamp').textContent = text;
+    // observation time of the static radar frame (when not animating)
+    if (!radarPlaying && s.radar_time && $('radar-tag').textContent !== s.radar_time) {
+      $('radar-tag').textContent = s.radar_time;
+    }
+  } catch (e) { /* keep old */ }
+}
+
+function refresh() {
+  if (document.hidden) return;
+  loadStatus();
+  const now = Date.now();
+  if (now - lastNews >= NEWS_TTL || !items.length) {
+    loadNews().then(() => {
+      if (items.length && !$('news-list').innerHTML) showBatch();
+    });
+  }
+  if (now - lastWeather >= WEATHER_TTL) loadWeather();
+  if (now - lastRadar >= RADAR_TTL) {
+    lastRadar = now;
+    const img = $('radar-img');
+    if (img) img.src = '/radar?t=' + now;
+  }
+}
+refresh();
+setInterval(refresh, 60 * 1000);
+setInterval(() => {                      // auto-advance to next page every 5 min
+  if (!document.hidden && items.length && Date.now() >= rotatePausedUntil) { page++; showBatch(); }
+}, 5 * 60 * 1000);
+
+// --- radar animation: ▶ preloads last ~45min of frames, plays ONCE, holds on newest ---
+let radarPlaying = false, radarBlobs = [];
+async function radarToggle() {
+  const img = $('radar-img'), btn = $('radar-btn'), tag = $('radar-tag');
+  if (radarPlaying) {                       // pressed ⏹ mid-play: cancel
+    radarPlaying = false;
+    return;
+  }
+  radarPlaying = true;
+  btn.textContent = '⏹';
+  radarBlobs.forEach(URL.revokeObjectURL);  // from the previous run
+  radarBlobs = [];
+  try {
+    tag.textContent = 'loading…';
+    const meta = await (await fetch('/radar-meta')).json();
+    if (!meta.count) throw new Error('no frames');
+    for (let i = 0; i < meta.count; i++) {  // preload directly from image.nmc.cn
+      tag.textContent = `loading ${i + 1}/${meta.count}`;
+      if (!radarPlaying) throw new Error('cancelled');
+      radarBlobs.push(URL.createObjectURL(await (await fetch(meta.urls[i])).blob()));
+    }
+    for (let i = 0; i < meta.count && radarPlaying; i++) {  // play once
+      img.src = radarBlobs[i];
+      await img.decode();   // update the tag ONLY once this frame is really shown
+      tag.textContent = `${meta.times[i] || ''} · ${i + 1}/${meta.count}`;
+      if (i < meta.count - 1) await new Promise(r => setTimeout(r, 600));
+    }
+    // hold on the newest frame; tag keeps showing its time
+  } catch (e) {
+    tag.textContent = '';
+    img.src = '/radar';
+  }
+  radarPlaying = false;
+  btn.textContent = '▶';
+}
+
+// --- hide cursor only after 5s idle ---
+let idleTimer;
+function poke() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => document.body.classList.add('idle'), 5000);
+}
+document.addEventListener('mousemove', poke);
+poke();
+
+// --- keep screen awake ---
+async function wakeLock() {
+  try { await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+wakeLock();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { wakeLock(); refresh(); }
+});
+</script>
+</body>
+</html>

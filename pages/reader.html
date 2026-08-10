@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#b4552b" />
+<meta name="color-scheme" content="light dark" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="News Reader" />
+<title>News Reader</title>
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --panel: #ffffff;
+    --ink: #23201b;
+    --ink-soft: #6b6459;
+    --line: #e5e0d6;
+    --accent: #b4552b;
+    --accent-soft: #f3e6dd;
+    --max: 100%;
+    --art-fs: 19px;
+    --ans-fs: 19px;
+    --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  }
+  /* Dark mode: follow the OS unless the reader was told otherwise, and let an
+     explicit [data-theme] (the ☀️/🌙 button, or &t= from the news list) override. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1815; --panel: #232019; --ink: #e9e4d9; --ink-soft: #9c9484;
+      --line: #383327; --accent: #e08a5a; --accent-soft: #3a2a1f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1815; --panel: #232019; --ink: #e9e4d9; --ink-soft: #9c9484;
+    --line: #383327; --accent: #e08a5a; --accent-soft: #3a2a1f;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
+  * { box-sizing: border-box; }
+  /* stop iOS double-tap-to-zoom on tappable controls (pinch-zoom on the article still works) */
+  button, input, #popup, .img-ph, .li-main, .li-del { touch-action: manipulation; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+
+  /* top bar */
+  header {
+    position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+    transition: transform .25s ease;
+  }
+  header.hidden { transform: translateY(-100%); }
+  .bar { max-width: var(--max); margin: 0 auto; padding: 12px 20px; display: flex; gap: 8px; align-items: center; }
+  .brand { font-weight: 700; font-size: 15px; letter-spacing: .3px; white-space: nowrap; color: var(--ink); }
+  .brand span { color: var(--accent); }
+  #url {
+    flex: 1; padding: 9px 13px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--panel); color: var(--ink); font-size: 14px; outline: none;
+  }
+  #url:focus { border-color: var(--accent); }
+  #go {
+    padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    color: var(--ink); font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  }
+  #go:hover { border-color: var(--accent); color: var(--accent); }
+  #go:disabled { opacity: .55; cursor: default; }
+  .fs {
+    padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    color: var(--ink); font-size: 13px; font-weight: 700; cursor: pointer; min-width: 34px;
+  }
+  .fs:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* article */
+  main { max-width: var(--max); margin: 0 auto; padding: 40px 24px 160px; }
+  .hint { color: var(--ink-soft); text-align: center; margin-top: 12vh; font-size: 15px; line-height: 2; }
+  .hint kbd { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+  .status { text-align: center; color: var(--ink-soft); margin-top: 10vh; font-size: 15px; }
+  .status.err { color: var(--accent); }
+
+  /* reading list */
+  .list-title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  .list-sub { color: var(--ink-soft); font-size: 13px; margin-bottom: 20px; }
+  .list-empty { color: var(--ink-soft); text-align: center; margin-top: 12vh; }
+  .list-item {
+    display: flex; align-items: flex-start; gap: 14px; padding: 16px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .li-main { flex: 1; min-width: 0; cursor: pointer; }
+  .li-main:hover .li-title { color: var(--accent); }
+  .li-title { font-size: 17px; font-weight: 600; line-height: 1.4; margin-bottom: 6px; }
+  .li-meta { font-size: 12.5px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .li-meta b { color: var(--ink); font-weight: 600; }
+  .li-del {
+    flex-shrink: 0; border: 1px solid var(--line); background: var(--panel); color: var(--ink-soft);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-family: var(--sans);
+  }
+  .li-del:hover { border-color: var(--accent); color: var(--accent); }
+
+  .del-btn {
+    margin-top: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink-soft);
+    border-radius: 8px; padding: 7px 14px; font-size: 13.5px; cursor: pointer; font-family: var(--sans);
+  }
+  .del-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .meta { margin-bottom: 28px; border-bottom: 1px solid var(--line); padding-bottom: 20px; }
+  .meta h1 { font-family: var(--serif); font-size: 30px; line-height: 1.25; margin: 0 0 12px; }
+  .meta .sub { color: var(--ink-soft); font-size: 13.5px; }
+  .meta .sub a { color: var(--ink-soft); }
+
+  article { font-family: var(--serif); font-size: var(--art-fs); }
+  article p { margin: 0 0 1.15em; }
+  article h1, article h2, article h3 { font-family: var(--sans); line-height: 1.3; margin: 1.6em 0 .5em; }
+  article h2 { font-size: 22px; } article h3 { font-size: 19px; }
+  article img { max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 1.4em auto; }
+  .img-ph {
+    display: block; width: fit-content; max-width: 100%; margin: 1em auto;
+    padding: 6px 12px; border: 1px dashed var(--line);
+    border-radius: 7px; background: var(--panel); color: var(--ink-soft); font-family: var(--sans);
+    font-size: 12.5px; cursor: pointer; user-select: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .img-ph:hover { border-color: var(--accent); color: var(--accent); }
+  .img-ph .cap { opacity: .7; }
+  article a { color: var(--accent); }
+  article blockquote {
+    margin: 1.2em 0; padding: .2em 1.1em; border-left: 3px solid var(--accent);
+    color: var(--ink-soft); font-style: italic;
+  }
+  article ul, article ol { padding-left: 1.4em; }
+  article li { margin: .3em 0; }
+  article code { font-family: ui-monospace, monospace; font-size: .85em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+
+  /* selection popup button */
+  /* light-background button — readable on e-ink screens */
+  #popup {
+    position: absolute; z-index: 50; display: none;
+    background: var(--panel); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 8px;
+    padding: 7px 14px; font-size: 13.5px; font-weight: 700; font-family: var(--sans);
+    cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.15); white-space: nowrap;
+    transform: translate(-50%, -100%);
+  }
+  #popup::after {
+    content: ""; position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--ink); border-bottom: none;
+  }
+  #popup:active { transform: translate(-50%, -100%) scale(.96); }
+  /* touch: show the button BELOW the selection (arrow points up) so it
+     doesn't collide with the OS copy/look-up toolbar that sits above */
+  #popup.below { transform: translate(-50%, 0); }
+  #popup.below:active { transform: translate(-50%, 0) scale(.96); }
+  #popup.below::after {
+    top: -6px; bottom: auto; border: 5px solid transparent;
+    border-bottom-color: var(--ink); border-top: none;
+  }
+
+  /* interpretation drawer */
+  #drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(420px, 92vw); z-index: 60;
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 30px rgba(0,0,0,.15);
+    transform: translateX(100%); transition: transform .28s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column;
+  }
+  #drawer.open { transform: translateX(0); }
+  .dhead { display: flex; align-items: center; gap: 8px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .dhead .t { font-weight: 700; font-size: 14px; flex: 1; }
+  .dhead #dclose { background: none; border: none; color: var(--ink-soft); font-size: 22px; cursor: pointer; line-height: 1; }
+  .dhead .fs { padding: 4px 8px; min-width: 30px; font-size: 12px; }
+  .dbody { padding: 18px; overflow-y: auto; flex: 1; }
+  /* context sentence, with the selected part highlighted */
+  .sel {
+    font-family: var(--serif); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 13px; margin-bottom: 16px; font-size: 15px;
+    color: var(--ink-soft); line-height: 1.6; font-size: var(--ans-fs); max-height: 200px; overflow-y: auto;
+  }
+  .sel mark { background: var(--accent-soft); color: var(--ink); border-radius: 3px; padding: 0 2px; font-weight: 600; }
+  .sel .lbl { display: block; font-family: var(--sans); font-size: 11px; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--ink-soft); margin-bottom: 6px; opacity: .7; }
+  /* conversation thread */
+  .turn { margin-bottom: 14px; }
+  .turn.q {
+    font-family: var(--sans); background: var(--accent-soft); color: var(--ink);
+    border-radius: 10px 10px 10px 2px; padding: 8px 12px; font-size: var(--ans-fs); align-self: flex-start;
+  }
+  .turn.q::before { content: "你："; font-weight: 700; color: var(--accent); }
+  /* follow-up input footer */
+  .dfoot { border-top: 1px solid var(--line); padding: 12px 14px; display: flex; gap: 8px; }
+  #followup {
+    flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--bg); color: var(--ink); font-size: 14px; outline: none; font-family: var(--sans);
+  }
+  #followup:focus { border-color: var(--accent); }
+  #sendFollow { padding: 9px 14px; border: none; border-radius: 9px; background: var(--accent);
+    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #sendFollow:disabled { opacity: .5; cursor: default; }
+  #sendFollow.stop { background: var(--panel); color: var(--accent); border: 1.5px solid var(--accent); }
+  .answer { font-size: var(--ans-fs); line-height: 1.7; }
+  .answer h1,.answer h2,.answer h3 { font-size: 1.08em; margin: 1em 0 .4em; }
+  .answer p { margin: 0 0 .8em; } .answer ul { padding-left: 1.3em; margin: .5em 0; }
+  .answer code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  .answer strong { color: var(--ink); }
+  .thinking { color: var(--ink-soft); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+  .answer .cursor { display:inline-block; width:7px; height:15px; background: var(--accent); animation: pulse .8s infinite; vertical-align:-2px; }
+
+  /* ---------- mobile ---------- */
+  @media (max-width: 640px) {
+    .bar { flex-wrap: wrap; padding: 10px 12px; gap: 6px; }
+    .brand { display: none; }                 /* save room on small screens */
+    #url { flex: 1 1 100%; order: 1; font-size: 16px; }  /* 16px avoids iOS zoom-on-focus */
+    #go { order: 2; }
+    #listBtn, #refresh, #fsDown, #fsUp { order: 3; }
+    #go, .fs { padding: 9px 12px; }
+    main { padding: 22px 16px 140px; }
+    .meta h1 { font-size: 24px; }
+    #drawer { width: 100vw; }                  /* full-screen interpretation on phone */
+    #popup { padding: 10px 16px; font-size: 15px; }  /* bigger touch target */
+    .li-title { font-size: 16px; }
+  }
+  /* honor iOS safe areas (notch / home bar) */
+  header { padding-top: env(safe-area-inset-top); }
+  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+
+  /* desktop: when the interpretation drawer opens, shift the article LEFT to make
+     room on the right so the drawer never covers the text you're reading */
+  @media (min-width: 900px) {
+    header .bar, main { transition: padding-right .28s ease; }
+    body:has(#nrw-drawer.open) main { padding-right: 462px; }
+    body:has(#nrw-drawer.open) header .bar { padding-right: 452px; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <input id="url" type="url" placeholder="粘贴一个新闻链接，回车打开阅读模式…" autocomplete="off" />
+      <button id="go">打开</button>
+      <button id="listBtn" class="fs" title="阅读列表">📚</button>
+      <button id="themeBtn" class="fs" title="日间/夜间">🌙</button>
+      <button id="refresh" class="fs" title="忽略缓存，重新抓取">↻</button>
+      <button id="fsDown" class="fs" title="缩小字号">A−</button>
+      <button id="fsUp" class="fs" title="放大字号">A+</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <div class="hint">
+      粘贴新闻链接，进入干净的阅读模式。<br>
+      阅读时<b>选中</b>任意词或句子，会弹出 <kbd>✨ 解读</kbd> 按钮 —— 点击即用 LLM 解读。
+    </div>
+  </main>
+
+
+<script src="/static/interpret-widget.js?v=20260808a"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const main = $('#main'), urlInput = $('#url'), goBtn = $('#go');
+let articleTitle = "", lastSel = "", lastCtx = "";
+
+// ---- font size (independent A+/A- for article & interpretation) ----
+const FS_MIN = 13, FS_MAX = 32;
+function makeFs(cssVar, storeKey, dflt){
+  const get = () => parseInt(localStorage.getItem(storeKey) || dflt, 10);
+  const set = (px) => {
+    px = Math.max(FS_MIN, Math.min(FS_MAX, px));
+    document.documentElement.style.setProperty(cssVar, px + 'px');
+    localStorage.setItem(storeKey, px);
+  };
+  set(get());
+  return { get, set };
+}
+const artFs = makeFs('--art-fs', 'nr_art_fs', '19');
+$('#fsUp').onclick   = () => artFs.set(artFs.get() + 1);
+$('#fsDown').onclick = () => artFs.set(artFs.get() - 1);
+
+// ---- tiny markdown renderer (safe-ish: escape then apply inline/block) ----
+function mdToHtml(md) {
+  const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const lines = md.split('\n'); let html = '', inList = false;
+  const inline = (t) => esc(t)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g,'<em>$1</em>');
+  for (let ln of lines) {
+    if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += '<li>' + inline(ln.replace(/^\s*[-*]\s+/,'')) + '</li>';
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+      const h = ln.match(/^(#{1,3})\s+(.*)/);
+      if (h) html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
+      else if (ln.trim() === '') html += '';
+      else html += '<p>' + inline(ln) + '</p>';
+    }
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
+// ---- load & render article ----
+let currentUrl = '', currentId = '';
+async function loadArticle(url, refresh) {
+  currentUrl = url;
+  main.innerHTML = '<div class="status">' + (refresh ? '重新抓取中…' : '正在抓取并整理…') + '</div>';
+  goBtn.disabled = true;
+  try {
+    const r = await fetch('/api/extract?url=' + encodeURIComponent(url) + (refresh ? '&refresh=1' : ''));
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    articleTitle = d.title || '';
+    currentId = d.id || '';
+    const bits = [d.author, d.sitename, d.date, (d.cached ? '缓存' : '刚抓取')].filter(Boolean).join(' · ');
+    main.innerHTML = `
+      <div class="meta">
+        <h1>${escapeHtml(d.title)}</h1>
+        <div class="sub">${escapeHtml(bits)} ${d.url ? `· <a href="${escapeAttr(d.url)}" target="_blank" rel="noopener">原文↗</a>`:''}</div>
+        <button id="delArticle" class="del-btn" title="删除并返回列表">🗑 读完删除</button>
+      </div>
+      <article id="article">${d.content_html}</article>`;
+    const art = document.getElementById('article');
+    if (art) setupImages(art);
+    const delBtn = document.getElementById('delArticle');
+    if (delBtn) delBtn.onclick = async () => {
+      delBtn.disabled = true; delBtn.textContent = '删除中…';
+      if (currentId) {
+        try { await fetch('/api/delete', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: currentId }) }); } catch (_) {}
+      }
+      showList();
+    };
+    window.scrollTo(0, 0);
+    location.hash = 'u=' + encodeURIComponent(url);
+  } catch (e) {
+    main.innerHTML = '<div class="status err">抓取失败：' + escapeHtml(e.message) + '</div>';
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+// images are NOT loaded up front — show a placeholder; load & reveal on click
+function setupImages(art){
+  art.querySelectorAll('img').forEach(img => {
+    const src = img.getAttribute('src'); if (!src) { img.remove(); return; }
+    img.replaceWith(makePlaceholder(src, img.getAttribute('alt') || ''));
+  });
+}
+function makePlaceholder(src, alt){   // click -> show image
+  const ph = document.createElement('div');
+  ph.className = 'img-ph';
+  ph.innerHTML = '🖼 点击显示图片' + (alt ? ' · <span class="cap">' + escapeHtml(alt) + '</span>' : '');
+  ph.onclick = () => ph.replaceWith(makeImage(src, alt));
+  return ph;
+}
+function makeImage(src, alt){         // click -> hide back to placeholder
+  const img = document.createElement('img');
+  img.src = src; img.alt = alt; img.loading = 'lazy';
+  img.style.cursor = 'zoom-out'; img.title = '点击收起';
+  img.onclick = () => img.replaceWith(makePlaceholder(src, alt));
+  return img;
+}
+function escapeHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escapeAttr(s){return escapeHtml(s).replace(/"/g,'&quot;');}
+
+goBtn.onclick = () => { const u = urlInput.value.trim(); if (u) loadArticle(u); };
+urlInput.onkeydown = (e) => { if (e.key === 'Enter') goBtn.onclick(); };
+$('#refresh').onclick = () => { const u = (urlInput.value.trim() || currentUrl); if (u) loadArticle(u, true); };
+
+// ---- reading list ----
+$('#listBtn').onclick = showList;
+function fmtTime(sec){
+  if (!sec) return '';
+  const d = new Date(sec * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function showList(){
+  location.hash = 'list';
+  main.innerHTML = '<div class="status">加载列表…</div>';
+  try {
+    const r = await fetch('/api/list');
+    const d = await r.json();
+    const items = d.items || [];
+    if (!items.length) { main.innerHTML = '<div class="list-empty">列表还是空的。<br>顶部粘贴一个新闻链接打开，就会自动加入。</div>'; return; }
+    let html = `<div class="list-title">📚 阅读列表</div><div class="list-sub">共 ${items.length} 篇 · 点标题打开，点删除移除缓存</div>`;
+    for (const it of items) {
+      const site = it.sitename ? escapeHtml(it.sitename) : '';
+      html += `<div class="list-item" data-id="${escapeAttr(it.id)}">
+        <div class="li-main" data-url="${escapeAttr(it.url||'')}">
+          <div class="li-title">${escapeHtml(it.title)}</div>
+          <div class="li-meta">
+            ${site ? `<span>${site}</span>` : ''}
+            <span>添加：<b>${escapeHtml(fmtTime(it.fetched_at))}</b></span>
+            ${it.date ? `<span>发布：<b>${escapeHtml(it.date)}</b></span>` : ''}
+          </div>
+        </div>
+        <button class="li-del" data-id="${escapeAttr(it.id)}" data-title="${escapeAttr(it.title)}">删除</button>
+      </div>`;
+    }
+    main.innerHTML = html;
+    main.querySelectorAll('.li-main').forEach(el => {
+      el.onclick = () => { const u = el.getAttribute('data-url'); if (u) { urlInput.value = u; loadArticle(u); } };
+    });
+    main.querySelectorAll('.li-del').forEach(el => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm('删除「' + el.getAttribute('data-title') + '」？')) return;
+        await fetch('/api/delete', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: el.getAttribute('data-id') }) });
+        el.closest('.list-item').remove();
+      };
+    });
+    window.scrollTo(0, 0);
+  } catch (e) {
+    main.innerHTML = '<div class="status err">列表加载失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// ---- selection popup ----
+function hidePopup(){ Interpret.hidePopup(); }
+document.addEventListener('selectionchange', () => {
+  // debounce via rAF; only react to selections inside the article
+});
+document.addEventListener('mouseup', handleSelect);
+document.addEventListener('touchend', handleSelect, {passive:true});
+function handleSelect(e){
+  if (e.target.closest && e.target.closest('.nrw-pop')) return;
+  setTimeout(() => {
+    const sel = window.getSelection();
+    const text = sel.toString().trim();
+    if (!text) { hidePopup(); return; }
+    // allow selection in the article body OR the title
+    const art = document.getElementById('article');
+    const titleEl = document.querySelector('.meta h1');
+    const anchor = sel.anchorNode;
+    const anchorEl = anchor ? (anchor.nodeType === 3 ? anchor.parentNode : anchor) : null;
+    const inArticle = art && anchorEl && art.contains(anchorEl);
+    const inTitle = titleEl && anchorEl && titleEl.contains(anchorEl);
+    if (!inArticle && !inTitle) { hidePopup(); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect.width && !rect.height) { hidePopup(); return; }
+    lastSel = text;
+    if (inArticle) {
+      lastCtxParts = buildContext(sel, art);
+    } else {
+      const t = titleEl.innerText, i = t.indexOf(text);
+      lastCtxParts = (i >= 0)
+        ? { ctx: t, left: t.slice(0, i), sel: text, right: t.slice(i + text.length) }
+        : { ctx: t, left: '', sel: text, right: '' };
+    }
+    lastCtx = lastCtxParts.ctx;
+    // touch devices: place below the selection to avoid the OS toolbar above it
+    const below = window.matchMedia('(pointer: coarse)').matches;
+    Interpret.popupAt(rect, { text: lastSel, title: articleTitle, context: lastCtx, parts: lastCtxParts }, below);
+  }, 10);
+}
+// Minimum characters of context to include on EACH side of the selection.
+// The window is expanded outward (across paragraphs if needed) until it
+// reaches this length, then truncated back to the nearest sentence boundary.
+const MIN_CTX_SIDE = 140;
+const SENT_END = /[.!?。！？…]/g;   // sentence-ending punctuation
+
+function blockOf(node, art){
+  const el = node && (node.nodeType === 3 ? node.parentNode : node);
+  return el ? (el.closest('p,li,blockquote,h1,h2,h3') || art) : art;
+}
+function textBetween(startBlock, startNode, startOff, endNode, endOff){
+  const r = document.createRange();
+  if (startBlock) r.selectNodeContents(startBlock); else return '';
+  if (startNode) r.setStart(startNode, startOff);
+  if (endNode) r.setEnd(endNode, endOff);
+  return r.toString();
+}
+// keep the TAIL of `text`, cut at a sentence boundary so >= minSide chars remain
+function trimLeft(text, minSide){
+  if (text.length <= minSide) return text;
+  const limit = text.length - minSide;
+  let idx = -1;
+  for (const m of text.matchAll(SENT_END)) { if (m.index < limit) idx = m.index; else break; }
+  return idx >= 0 ? '…' + text.slice(idx + 1).replace(/^\s+/, '') : text;
+}
+// keep the HEAD of `text`, cut at first sentence boundary at/after minSide
+function trimRight(text, minSide){
+  if (text.length <= minSide) return text;
+  for (const m of text.matchAll(SENT_END)) { if (m.index >= minSide) return text.slice(0, m.index + 1) + '…'; }
+  return text;
+}
+function buildContext(sel, art){
+  try {
+    const range = sel.getRangeAt(0);
+    const blocks = [...art.querySelectorAll('p,li,blockquote,h1,h2,h3')];
+    const startBlock = blockOf(range.startContainer, art);
+    const endBlock = blockOf(range.endContainer, art);
+    // left: text before selection in its block, extended into previous blocks
+    let lr = document.createRange(); lr.selectNodeContents(startBlock); lr.setEnd(range.startContainer, range.startOffset);
+    let left = lr.toString();
+    let bi = blocks.indexOf(startBlock);
+    while (left.length < MIN_CTX_SIDE && bi - 1 >= 0) { bi--; left = blocks[bi].innerText + ' ' + left; }
+    // right: text after selection in its block, extended into following blocks
+    let rr = document.createRange(); rr.selectNodeContents(endBlock); rr.setStart(range.endContainer, range.endOffset);
+    let right = rr.toString();
+    let ei = blocks.indexOf(endBlock);
+    while (right.length < MIN_CTX_SIDE && ei + 1 < blocks.length && ei !== -1) { ei++; right = right + ' ' + blocks[ei].innerText; }
+
+    left = trimLeft(left.replace(/\s+/g, ' '), MIN_CTX_SIDE);
+    right = trimRight(right.replace(/\s+/g, ' '), MIN_CTX_SIDE);
+    const selStr = sel.toString();
+    // keep a hair of spacing so words don't glue together in display
+    const lsp = left && !/\s$/.test(left) ? left + ' ' : left;
+    const rsp = right && !/^\s/.test(right) ? ' ' + right : right;
+    return { ctx: (lsp + selStr + rsp).trim(), left: lsp, sel: selStr, right: rsp };
+  } catch { const s = sel.toString(); return { ctx: s, left: '', sel: s, right: '' }; }
+}
+let lastCtxParts = { ctx: '', left: '', sel: '', right: '' };
+document.addEventListener('mousedown', (e) => { if (!(e.target.closest && e.target.closest('.nrw-pop'))) hidePopup(); });
+window.addEventListener('scroll', hidePopup, {passive:true});
+
+// auto-hide top bar: hide on scroll down, reveal on scroll up
+const headerEl = document.querySelector('header');
+let lastY = 0;
+window.addEventListener('scroll', () => {
+  const y = window.scrollY;
+  if (Math.abs(y - lastY) < 6) return;               // ignore tiny jitter
+  if (y > lastY && y > 70) headerEl.classList.add('hidden');   // scrolling down
+  else headerEl.classList.remove('hidden');                    // scrolling up
+  lastY = y;
+}, {passive:true});
+
+// ---- display mode (light/dark) ----
+// Precedence: &t= handed over by the news list  >  this origin's saved choice  >  OS.
+// The news list is a different page, so localStorage can't be shared — hence the hash param.
+(function(){
+  const KEY = 'nrw_theme', btn = document.getElementById('themeBtn');
+  let handoff = new URLSearchParams(location.search).get('t');   // ?t= from the news list
+  if (handoff !== 'dark' && handoff !== 'light') handoff = (location.hash.match(/[#&]t=(dark|light)/) || [])[1];
+  const osDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+  function apply(t, persist) {
+    document.documentElement.dataset.theme = t;
+    if (persist) localStorage.setItem(KEY, t);
+    btn.textContent = t === 'dark' ? '☀️' : '🌙';   // shows what tapping switches TO
+  }
+  if (handoff) localStorage.setItem(KEY, handoff);
+  apply(handoff || localStorage.getItem(KEY) || (osDark() ? 'dark' : 'light'), false);
+  btn.onclick = () => apply(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+})();
+
+// ---- restore from ?u= query (robust across browsers) or legacy #u= hash ----
+(function(){
+  const qu = new URLSearchParams(location.search).get('u');   // URLSearchParams already decodes
+  if (qu) { urlInput.value = qu; loadArticle(qu); return; }
+  if (location.hash === '#list') { showList(); return; }
+  const m = location.hash.match(/u=([^&]+)/);
+  if (m) { const u = decodeURIComponent(m[1]); urlInput.value = u; loadArticle(u); }
+})();
+</script>
+</body>
+</html>

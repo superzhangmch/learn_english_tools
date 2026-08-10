@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+httpx
+trafilatura
+lxml_html_clean

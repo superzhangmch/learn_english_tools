@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+cache/
+server.log
+.DS_Store
+.claude/
+dismissed.json
+_*
+config.py

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>News</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="color-scheme" content="light dark">
+
+<style>
+  /* Light is the default; [data-theme="dark"] on <html> flips it. The --panel /
+     --ink / --line / --ink-soft / --accent-soft names are the ones the shared
+     interpret widget reads, so the drawer and popup follow the theme too. */
+  :root {
+    --nfs: 17px;
+    color-scheme: light;
+    --bg: #fff; --fg: #111; --hdr: rgba(255,255,255,.92);
+    --line: #eee; --btn-bd: #ccc; --src: #777; --dt: #aaa; --status: #999;
+    --panel: #fff; --ink: #111; --ink-soft: #555; --accent-soft: #eee;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121212; --fg: #e6e6e6; --hdr: rgba(18,18,18,.92);
+    --line: #2b2b2b; --btn-bd: #4a4a4a; --src: #9a9a9a; --dt: #6f6f6f; --status: #8a8a8a;
+    --panel: #1c1c1c; --ink: #e6e6e6; --ink-soft: #a8a8a8; --accent-soft: #2e2e2e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--fg); overflow-x: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    line-height: 1.5;
+    padding: max(12px, env(safe-area-inset-top)) 15px calc(40px + env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--hdr); backdrop-filter: blur(6px);
+    display: flex; align-items: center; gap: 8px; padding: 8px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px;
+  }
+  header h1 { font-size: 19px; font-weight: 800; flex: 1; letter-spacing: .02em; }
+  .hb { border: 1px solid var(--btn-bd); background: var(--panel); border-radius: 8px; padding: 6px 10px; font-size: 13px; font-weight: 700; color: var(--fg); min-width: 34px; }
+
+  ul { list-style: none; }
+  /* title fills full width on every line; the buttons float right onto the LAST line
+     (right-aligned, same line as the title's end) — no wasted space */
+  li { padding: 9px 2px; border-bottom: 1px solid var(--line); line-height: 1.55; overflow: hidden; }  /* overflow:hidden contains the float */
+  .src { font-size: .72em; font-weight: 800; letter-spacing: .06em; color: var(--src); margin-right: 6px; vertical-align: 1px; }
+  .date { font-size: .72em; color: var(--dt); margin-left: 6px; white-space: nowrap; }
+  .ti { font-size: var(--nfs); user-select: text; overflow-wrap: anywhere; }
+  .btns { float: right; margin-left: 10px; white-space: nowrap; }   /* read + del, right-aligned on the last line */
+  /* read & del share the same button style so delete isn't a stray glyph you mis-tap */
+  .go, .x { display: inline-block; border: 1px solid var(--fg); border-radius: 6px; padding: 1px 9px; margin-left: 8px; font-size: 12.5px; font-weight: 700; text-decoration: none; color: var(--fg); white-space: nowrap; vertical-align: 1px; }
+  .status { text-align: center; color: var(--status); margin-top: 22vh; font-size: 15px; }
+  a, button, .x, .go { touch-action: manipulation; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>📰 News</h1>
+    <button id="theme" class="hb" title="日间/夜间">🌙</button>
+    <button id="fsdown" class="hb" title="字号缩小">A−</button>
+    <button id="fsup" class="hb" title="字号放大">A+</button>
+    <button id="refresh" class="hb" title="刷新">↻</button>
+  </header>
+  <ul id="list"></ul>
+  <div class="status" id="status">加载中…</div>
+
+  <!-- only the interpret widget is loaded from the reader; no weather/radar/calendar traffic -->
+  <script>window.INTERPRET_BASE = '';</script>
+  <script src="/static/interpret-widget.js?v=20260808a"></script>
+  <script>
+  const $ = s => document.querySelector(s), list = $('#list'), status = $('#status');
+  let items = [];
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // font size (persisted), applied to the news titles via --nfs
+  const FS_KEY = 'news_fs', FMIN = 12, FMAX = 30;
+  const fsGet = () => Math.max(FMIN, Math.min(FMAX, parseInt(localStorage.getItem(FS_KEY) || '17', 10)));
+  const fsSet = px => { px = Math.max(FMIN, Math.min(FMAX, px)); localStorage.setItem(FS_KEY, px); document.documentElement.style.setProperty('--nfs', px + 'px'); };
+  fsSet(fsGet());
+  $('#fsup').onclick = () => fsSet(fsGet() + 1);
+  $('#fsdown').onclick = () => fsSet(fsGet() - 1);
+
+  // display mode: explicit choice wins, otherwise follow the OS on first visit
+  const TH_KEY = 'news_theme';
+  const thGet = () => localStorage.getItem(TH_KEY)
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  function thSet(t, persist) {
+    document.documentElement.dataset.theme = t;
+    if (persist) localStorage.setItem(TH_KEY, t);
+    $('#theme').textContent = t === 'dark' ? '☀️' : '🌙';   // shows what tapping switches TO
+    const m = document.querySelector('meta[name=theme-color]');
+    if (m) m.content = t === 'dark' ? '#121212' : '#ffffff';
+    if (items.length) render();   // read links carry the theme across to the reader
+  }
+  thSet(thGet(), false);
+  $('#theme').onclick = () => thSet(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
+
+  async function load(refresh) {
+    status.style.display = 'block';
+    status.textContent = refresh ? '刷新中…' : '加载中…';
+    try {
+      const r = await fetch('/news', { cache: 'no-store' });
+      items = (await r.json()).items || [];
+      render();
+    } catch (e) { status.textContent = '加载失败：' + e.message; }
+  }
+  function render() {
+    if (!items.length) { list.innerHTML = ''; status.textContent = '暂无新闻'; status.style.display = 'block'; return; }
+    status.style.display = 'none';
+    list.innerHTML = items.map(it =>
+      '<li>' +
+        // the space between .src and .ti is load-bearing: without a whitespace text
+        // node the browser treats "BBC" + the first title word as ONE word, so a
+        // long-press selects the source label too and the anchor lands outside .ti
+        `<span class="src">${esc(it.source)}</span> ` +
+        `<span class="ti">${esc(it.title)}</span> ` +
+        (it.date ? ` <span class="date">${esc(it.date)}</span>` : '') +
+        '<span class="btns">' +
+          (it.link ? `<a class="go" href="/reader/?u=${encodeURIComponent(it.link)}&t=${document.documentElement.dataset.theme || 'light'}" target="_blank" rel="noopener">read</a>` : '') +
+          `<span class="x" data-k="${encodeURIComponent(it.link || it.title)}" title="删除">del</span>` +
+        '</span>' +
+      '</li>').join('');
+  }
+  // ✕ dismiss (persisted on the server)
+  list.addEventListener('click', e => {
+    if (!e.target.classList.contains('x')) return;
+    const key = decodeURIComponent(e.target.dataset.k);
+    fetch('/dismiss', { method: 'POST', body: JSON.stringify({ key }) });
+    items = items.filter(it => (it.link || it.title) !== key);
+    e.target.closest('li').remove();   // drop only this row; don't re-render (keeps other markers alive)
+  });
+  $('#refresh').onclick = () => load(true);
+
+  // select a word/phrase in a title -> shared interpret widget (right drawer + chat)
+  function onSel(e) {
+    if (e.target.closest && e.target.closest('.nrw-pop')) return;
+    setTimeout(() => {
+      const sel = window.getSelection(), text = sel.toString().trim();
+      if (!text) { window.Interpret && Interpret.hidePopup(); return; }
+      // resolve the .ti from either end of the selection: a drag that starts in the
+      // source label (or ends past the title) must still find its title
+      const up = n => { const e = n && n.nodeType === 3 ? n.parentNode : n; return e && e.closest ? e.closest('.ti') : null; };
+      const ti = up(sel.anchorNode) || up(sel.focusNode);
+      if (!ti) { window.Interpret && Interpret.hidePopup(); return; }
+      const title = ti.textContent.trim();
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      window.Interpret && Interpret.popupAt(rect, { text, title, context: title }, true);
+    }, 10);
+  }
+  document.addEventListener('mouseup', onSel);
+  document.addEventListener('touchend', onSel, { passive: true });
+
+  load();
+  setInterval(() => { if (!document.hidden) load(true); }, 20 * 60 * 1000);
+  </script>
+</body>
+</html>
