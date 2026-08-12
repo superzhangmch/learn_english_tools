@@ -247,13 +247,18 @@
     const M = 6, w = pop.offsetWidth, h = pop.offsetHeight, half = w / 2;
     const cx = Math.min(Math.max(rect.left + rect.width / 2, half + M),
                         window.innerWidth - half - M);
-    let top = below ? rect.bottom + 60 : rect.top - 8;   // extra gap so it clears the OS lookup/search bar
+    // Keep a deliberate gap from the selection so our button clears the OS's own
+    // selection callout / handles — the SAME distance whether we end up below the
+    // text (top = bubble's top edge) or above it (top = bubble's bottom edge, since
+    // the base .nrw-pop is translate(-50%,-100%)).
+    const GAP = 60;
+    let top = below ? rect.bottom + GAP : rect.top - GAP;
     if (below && top + h > window.innerHeight - M) {     // no room below -> flip above
       pop.classList.remove('below');
-      top = Math.max(rect.top - 8, h + M);
+      top = Math.max(rect.top - GAP, h + M);
     } else if (!below && top - h < M) {                  // no room above -> flip below
       pop.classList.add('below');
-      top = rect.bottom + 60;
+      top = rect.bottom + GAP;
     }
     pop.style.left = cx + 'px';
     pop.style.top = top + 'px';
