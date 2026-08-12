@@ -122,6 +122,21 @@
   #news-nav .nav { padding: 0 0.9em; font-weight: 600; cursor: pointer; user-select: none; }
   #news-nav #news-pg { letter-spacing: 0.1em; }
 
+  /* ---- 电脑浏览器专用工具(右上角): ⚙设置 / 切手机版 ----
+     e-ink/手机上整块隐藏(JS 加 .on 才显示), 所以墨水屏那张脸还是干净的。
+     固定定位放在 3vw/3vh 的 padding 空隙里, 日历表格居中且比列窄, 不会压到。 */
+  #tools {
+    position: fixed; top: 0.4vh; right: 0.8vw; z-index: 10;
+    display: none; align-items: center; gap: 0.5em;
+  }
+  #tools.on { display: flex; }
+  #tools .tbtn {
+    background: #fff; color: #000; border: 1px solid #000; border-radius: 4px;
+    font-family: inherit; font-size: clamp(12px, 1.1vw, 17px); font-weight: 700;
+    line-height: 1.5; padding: 1px 0.5em;
+    text-decoration: none; cursor: pointer; user-select: none;
+  }
+
   /* ---- 数据更新时间戳(右下角) ---- */
   #stamp {
     position: fixed; right: 0.8vw; bottom: 0.6vh;
@@ -170,6 +185,12 @@
   <div id="cal-box"><table id="cal"></table></div>
 
   <div id="stamp"></div>
+
+  <!-- 只在电脑浏览器上出现(见下方 JS) -->
+  <div id="tools">
+    <button id="gear" class="tbtn nrw-gear" title="设置（模型 / 字号 / 显示）">⚙</button>
+    <a class="tbtn" href="/mobile.html" title="切换到手机版">手机版</a>
+  </div>
 
   <!-- 行2: 新闻(占两列) | 云图 -->
   <div id="news">
@@ -398,6 +419,17 @@ function nHandleSelect(e){
 }
 document.addEventListener('mouseup', nHandleSelect);
 document.addEventListener('touchend', nHandleSelect, { passive: true });
+
+// --- ⚙设置 + 手机版入口: 只在电脑浏览器显示 ---
+// 判断和 server.py 的 UA 跳转保持一致(靠 "Mobile"), 另外挡掉"请求桌面版"的 iPad。
+// 注意不能用视口宽度判断: 电脑上把窗口拖窄了, 那还是电脑。
+const isPhoneUA = /Mobile|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+if (!isPhoneUA) {
+  $('tools').classList.add('on');
+  // .nrw-gear 这个 class 是必须的: widget 的 click-outside 靠它才不会把刚打开的菜单关掉
+  $('gear').onclick = () => window.Interpret && Interpret.settings();
+}
 
 // --- foreground-only scheduler ---
 // 页面在前台才发请求; 每分钟检查一次各数据是否过期(新闻拿不到时会自动重试)。

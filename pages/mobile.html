@@ -38,6 +38,10 @@
   }
   header h1 { font-size: 19px; font-weight: 800; flex: 1; letter-spacing: .02em; }
   .hb { border: 1px solid var(--btn-bd); background: var(--panel); border-radius: 8px; padding: 6px 10px; font-size: 13px; font-weight: 700; color: var(--fg); min-width: 34px; }
+  /* 回桌面版的入口(只在电脑浏览器上显示, 见下方 JS)。<a> 需要 inline-block 才吃 min-width,
+     所以 [hidden] 要显式压回 display:none, 否则默认隐藏会失效。 */
+  a.hb { display: inline-block; text-align: center; text-decoration: none; }
+  a.hb[hidden] { display: none; }
 
   ul { list-style: none; }
   /* title fills full width on every line; the buttons float right onto the LAST line
@@ -56,6 +60,7 @@
 <body>
   <header>
     <h1>📰 News</h1>
+    <a id="todesk" class="hb" href="/index.html" title="切换到桌面版" hidden>桌面版</a>
     <button id="refresh" class="hb" title="刷新">↻</button>
     <button id="gear" class="hb nrw-gear" title="设置（模型 / 字号 / 显示模式）">⚙</button>
   </header>
@@ -87,6 +92,11 @@
   if (_m) _m.content = th0 === 'dark' ? '#121212' : '#ffffff';
 
   $('#gear').onclick = () => window.Interpret && Interpret.settings();
+
+  // 在电脑浏览器上看手机版时, 给一个回桌面版的入口; 真手机上不显示, 免得误触跳到墨水屏那版。
+  const isPhoneUA = /Mobile|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  if (!isPhoneUA) $('#todesk').hidden = false;
 
   async function load(refresh) {
     status.style.display = 'block';
