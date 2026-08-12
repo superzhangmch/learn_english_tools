@@ -297,7 +297,11 @@ async def interpret(req: InterpretReq):
         "messages": _build_messages(req),
         "stream": True,
         "temperature": 0.3,
-        "max_tokens": 800,
+        # 推理模型(deepseek-v4-flash / 开了 thinking 的 glm-5.x)会把 max_tokens 花在
+        # reasoning_content 上, 而下面只转发 delta.content。800 时思考经常就把额度吃光,
+        # 抽屉里只剩"(无内容)"。给到 4000: 实测一次解读连思考才 500~800 token,
+        # 留足余量, 思考再长也轮得到正文, 长句语法分析也不会被 finish=length 截断。
+        "max_tokens": 4000,
     }
     payload.update(sel.get("extra") or {})   # per-model extras (e.g. GLM thinking:disabled)
     headers = {"Authorization": f"Bearer {sel['api_key']}", "Content-Type": "application/json"}
@@ -312,6 +316,8 @@ async def interpret(req: InterpretReq):
                         body = (await resp.aread()).decode("utf-8", "replace")[:400]
                         yield _sse({"error": f"LLM {resp.status_code}: {body}"})
                         return
+                    got_content = False
+                    finish = None
                     async for line in resp.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -320,11 +326,21 @@ async def interpret(req: InterpretReq):
                             break
                         try:
                             chunk = json.loads(data)
-                            delta = chunk["choices"][0]["delta"].get("content")
+                            choice = chunk["choices"][0]
+                            # 先记 finish_reason: 末尾那个 chunk 往往没有 delta, 会 KeyError 跳掉
+                            finish = choice.get("finish_reason") or finish
+                            delta = choice["delta"].get("content")
                             if delta:
+                                got_content = True
                                 yield _sse({"delta": delta})
                         except (json.JSONDecodeError, KeyError, IndexError):
                             continue
+                    # 一个 delta 都没有时, 别让前端只显示"(无内容)"——说清楚到底怎么了
+                    if not got_content:
+                        yield _sse({"error": (
+                            f"模型没有输出正文 (finish_reason={finish})。"
+                            "多半是思考过程把 max_tokens 用完了, 换个模型或调大 max_tokens 再试。"
+                        )})
         except Exception as e:  # noqa: BLE001
             yield _sse({"error": str(e)})
         yield _sse({"done": True})
