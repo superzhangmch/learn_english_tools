@@ -8,3 +8,7 @@ server.log
 dismissed.json
 _*
 config.py
+# 带 key 的配置一律不进库: config.py.bak / config.py.20260812 这种副本以前是漏网的
+# (config_example.py 不受影响, 它不匹配 config.py*)
+config.py*
+*.bak
