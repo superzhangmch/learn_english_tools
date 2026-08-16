@@ -1,4 +1,4 @@
-# learn_english
+# learn_english_tools
 
 Three small self-hosted tools for reading English, sharing one
 "select text → LLM interpretation" interaction.
