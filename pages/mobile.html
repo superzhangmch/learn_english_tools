@@ -52,9 +52,11 @@
   .ti { font-size: var(--nfs); user-select: text; overflow-wrap: anywhere; }
   .btns { float: right; margin-left: 10px; white-space: nowrap; }   /* read + del, right-aligned on the last line */
   /* read & del share the same button style so delete isn't a stray glyph you mis-tap */
-  .go, .x { display: inline-block; border: 1px solid var(--fg); border-radius: 6px; padding: 1px 9px; margin-left: 8px; font-size: 12.5px; font-weight: 700; text-decoration: none; color: var(--fg); white-space: nowrap; vertical-align: 1px; }
+  /* 三个都是图标了(✨解读 / 📖阅读 / 🗑删除)。emoji 宽度各不相同, 所以用 min-width +
+     居中把三个按钮撑成一样大, 免得一排看着参差不齐; 字号比原来的文字略大好点。 */
+  .go, .x, .ex { display: inline-block; border: 1px solid var(--fg); border-radius: 6px; padding: 1px 6px; margin-left: 8px; min-width: 2.2em; text-align: center; font-size: 15px; line-height: 1.45; font-weight: 700; text-decoration: none; color: var(--fg); white-space: nowrap; vertical-align: 1px; }
   .status { text-align: center; color: var(--status); margin-top: 22vh; font-size: 15px; }
-  a, button, .x, .go { touch-action: manipulation; }
+  a, button, .x, .go, .ex { touch-action: manipulation; }
 </style>
 </head>
 <body>
@@ -69,7 +71,7 @@
 
   <!-- only the interpret widget is loaded from the reader; no weather/radar/calendar traffic -->
   <script>window.INTERPRET_BASE = '';</script>
-  <script src="/static/interpret-widget.js?v=20260812a"></script>
+  <script src="/static/interpret-widget.js?v=20260814b"></script>
   <script>
   const $ = s => document.querySelector(s), list = $('#list'), status = $('#status');
   let items = [];
@@ -119,11 +121,29 @@
         `<span class="ti">${esc(it.title)}</span> ` +
         (it.date ? ` <span class="date">${esc(it.date)}</span>` : '') +
         '<span class="btns">' +
-          (it.link ? `<a class="go" href="/reader/?u=${encodeURIComponent(it.link)}" target="_blank" rel="noopener">read</a>` : '') +
-          `<span class="x" data-k="${encodeURIComponent(it.link || it.title)}" title="删除">del</span>` +
+          `<span class="ex" role="button" title="解读整条标题" aria-label="解读">✨</span>` +
+          (it.link ? `<a class="go" href="/reader/?u=${encodeURIComponent(it.link)}" target="_blank" rel="noopener" title="阅读原文" aria-label="阅读">📖</a>` : '') +
+          `<span class="x" role="button" data-k="${encodeURIComponent(it.link || it.title)}" title="删除" aria-label="删除">🗑</span>` +
         '</span>' +
       '</li>').join('');
   }
+  // ✨ = 等价于把整条标题选中再点弹窗里的 ✨解读, 只是省掉长按选中那一步。
+  // 标题从 DOM 现取, 不用 items 下标: del 只 filter 了 items 并移除那个 li, 没有重新
+  // render, 剩下的行还挂着旧下标, 用下标会取错条目。
+  // 不用自己管去重: widget 按 mode+文字+上下文 自动认会话, 连点只会把已有结果重新打开。
+  // anchor 必须传 —— 否则 marker 会去找上一次的选区, 落到毫无关系的位置。
+  // anchor 给 .ti(标题)而不是按钮: 挂在按钮后面的话, 小红点被夹在 ✨ 和 📖 中间, 太挤,
+  // 手指根本点不到。挂在标题末尾就有整行的空地, 和选中文字时红点出现在文字处也一致。
+  list.addEventListener('click', e => {
+    const b = e.target.closest('.ex'); if (!b) return;
+    const li = b.closest('li'), ti = li && li.querySelector('.ti');
+    const title = ti ? ti.textContent.trim() : '';
+    if (!title || !window.Interpret) return;
+    // deferred=true: 后台跑, 不弹抽屉 —— 你可能正在看别的条目, 抽屉一弹就挡住了。
+    // 标题后面的小红点会转成绿色闪(解读中)/红色(可看); 点红点、或者再点一次 ✨ 都能打开看。
+    Interpret.open({ text: title, title: title, context: title, anchor: ti }, true, 'interpret');
+  });
+
   // ✕ dismiss (persisted on the server)
   list.addEventListener('click', e => {
     if (!e.target.classList.contains('x')) return;
