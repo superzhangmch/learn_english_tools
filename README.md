@@ -1,4 +1,4 @@
-# learning_english
+# learn_english
 
 三个自用的英语学习小工具，共用同一套「选中文字 → LLM 解读」的交互。
 
