@@ -12,3 +12,8 @@ config.py
 # (config_example.py 不受影响, 它不匹配 config.py*)
 config.py*
 *.bak
+# 以上 pattern 都不带前导斜杠, 所以对任意层级生效 —— news_reader/config.py 和
+# book_reader/config.py 一样被挡住, 三个子项目共用这一份保险。
+# book_reader 的 SQLite 状态库, 不该进库
+# (注意: .gitignore 不支持行尾注释, 注释必须独占一行, 否则整行都成了 pattern)
+reader.db
