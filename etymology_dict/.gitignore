@@ -1,0 +1,20 @@
+# Build artifacts
+objects/
+*.dictionary/
+
+# External tool (clone separately, see README)
+mac-dictionary-kit/
+
+# Old hello-world test files
+MyDict.xml
+MyDict.css
+MyDict.plist
+Makefile
+build.py
+
+# macOS junk
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
