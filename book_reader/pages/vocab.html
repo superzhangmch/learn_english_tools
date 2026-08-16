@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生词本</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#fff; --ink:#1a1a1a; --ink-soft:#6b6b6b; --ink-faint:#a8a49c;
+  --line:#e2ded4; --accent-soft:#efece3; --accent:#7a1f1f;
+  --serif:"Iowan Old Style",Palatino,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Heiti SC",sans-serif;
+}
+:root[data-theme=dark]{
+  --bg:#121212; --panel:#1a1a1a; --ink:#e6e3dd; --ink-soft:#9b9689; --ink-faint:#6a655c;
+  --line:#2e2c28; --accent-soft:#252320; --accent:#d09a9a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px}
+header{position:sticky;top:0;display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:var(--bg);border-bottom:1px solid var(--line);z-index:5}
+header h1{font-size:16px;margin:0;font-weight:700}
+header .n{color:var(--ink-faint);font-size:13px}
+header .sp{flex:1}
+header a,header button{font:inherit;font-size:13px;color:var(--ink);background:none;
+  border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer;text-decoration:none}
+header button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+main{max-width:44em;margin:0 auto;padding:14px 16px 60px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:13px 15px;margin-bottom:11px}
+.card .top{display:flex;align-items:baseline;gap:9px;margin-bottom:7px}
+.card .term{font-family:var(--serif);font-size:19px;font-weight:700}
+.card .tag{font-size:11px;color:var(--ink-soft);border:1px solid var(--line);
+  border-radius:20px;padding:1px 8px;white-space:nowrap}
+.card .where{margin-left:auto;font-size:12px;color:var(--ink-faint);text-align:right;white-space:nowrap}
+.card .del{background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:17px;line-height:1;padding:0 2px}
+.card .sent{font-family:var(--serif);font-size:14.5px;line-height:1.6;color:var(--ink-soft);
+  border-left:2px solid var(--line);padding-left:11px;margin-bottom:9px}
+.card .sent mark{background:var(--accent-soft);color:var(--ink);font-weight:600;border-radius:3px;padding:0 2px}
+.card .ans{font-size:14.5px;line-height:1.68}
+.card .ans p{margin:0 0 .55em}
+.card .ans ul{margin:.4em 0;padding-left:1.3em}
+.card .ans h1,.card .ans h2,.card .ans h3{font-size:1.03em;margin:.7em 0 .3em}
+.card .ans code{background:var(--accent-soft);padding:1px 5px;border-radius:4px;font-size:.9em}
+.card.collapsed .ans,.card.collapsed .sent{display:none}
+.status{padding:3em 0;text-align:center;color:var(--ink-soft)}
+</style>
+</head>
+<body>
+<header>
+  <h1>📓 生词本</h1><span class="n" id="count"></span>
+  <span class="sp"></span>
+  <button id="fWords">只看词/短语</button>
+  <button id="fold">折叠</button>
+  <a href="/read">← 回到阅读</a>
+</header>
+<main><div id="list" class="status">载入中…</div></main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let items = [], wordsOnly = false, folded = false;
+
+document.documentElement.dataset.theme = localStorage.getItem('nrw_theme') ||
+  (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const MODE_LABEL = { interpret: '解读', grammar: '语法', background: '背景' };
+
+// same minimal markdown the drawer renders, so entries read identically here
+function md(src){
+  const lines = String(src || '').split('\n');
+  let out = '', inList = false;
+  const inline = (t) => esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  for (const ln of lines) {
+    if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { out += '<ul>'; inList = true; }
+      out += '<li>' + inline(ln.replace(/^\s*[-*]\s+/, '')) + '</li>';
+    } else {
+      if (inList) { out += '</ul>'; inList = false; }
+      const h = ln.match(/^(#{1,3})\s+(.*)/);
+      if (h) out += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
+      else if (ln.trim()) out += '<p>' + inline(ln) + '</p>';
+    }
+  }
+  return out + (inList ? '</ul>' : '');
+}
+
+function sentenceHtml(it){
+  const s = it.sentence || '';
+  if (!s) return '';
+  const i = s.indexOf(it.text);
+  return i >= 0
+    ? esc(s.slice(0, i)) + '<mark>' + esc(it.text) + '</mark>' + esc(s.slice(i + it.text.length))
+    : esc(s);
+}
+
+function render(){
+  const list = $('#list');
+  const shown = wordsOnly ? items.filter(i => i.text.length <= 40) : items;
+  $('#count').textContent = shown.length + ' 条';
+  if (!shown.length) {
+    list.className = 'status';
+    list.textContent = '还没有记录。在阅读页选中词句、点「✨ 解读」，就会自动存到这里。';
+    return;
+  }
+  list.className = '';
+  list.innerHTML = shown.map(it => `
+    <div class="card${folded ? ' collapsed' : ''}" data-id="${it.id}">
+      <div class="top">
+        <span class="term">${esc(it.text.length > 60 ? it.text.slice(0, 60) + '…' : it.text)}</span>
+        <span class="tag">${esc(MODE_LABEL[it.mode] || it.mode)}</span>
+        <span class="where">${esc(it.chapter_title || '')}${it.page ? ' · p.' + esc(it.page) : ''}</span>
+        <button class="del" title="删除">×</button>
+      </div>
+      <div class="sent">${sentenceHtml(it)}</div>
+      <div class="ans">${md(it.answer)}</div>
+    </div>`).join('');
+  list.querySelectorAll('.del').forEach(b => b.onclick = async (e) => {
+    const card = e.target.closest('.card'), id = +card.dataset.id;
+    await fetch('/api/vocab/' + id, { method: 'DELETE' });
+    items = items.filter(i => i.id !== id);
+    render();
+  });
+  list.querySelectorAll('.term').forEach(t => t.onclick = (e) =>
+    e.target.closest('.card').classList.toggle('collapsed'));
+}
+
+$('#fWords').onclick = (e) => { wordsOnly = !wordsOnly; e.target.classList.toggle('on', wordsOnly); render(); };
+$('#fold').onclick = (e) => { folded = !folded; e.target.classList.toggle('on', folded); render(); };
+
+(async function(){
+  try {
+    items = (await (await fetch('/api/vocab?limit=1000')).json()).items || [];
+  } catch (e) {
+    $('#list').innerHTML = '载入失败：' + esc(e.message);
+    return;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

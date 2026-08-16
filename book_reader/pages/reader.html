@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Book Reader</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#fff; --ink:#1a1a1a; --ink-soft:#6b6b6b; --ink-faint:#a8a49c;
+  --line:#e2ded4; --accent-soft:#efece3; --accent:#7a1f1f;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC",serif;
+  /* Latin faces before the CJK ones: otherwise a curly apostrophe resolves from
+     a CJK font and comes out full-width in the middle of English prose. */
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,
+    "Noto Sans","PingFang SC","Heiti SC",sans-serif;
+  /* the reading face, switched in the ⚙ menu; chrome stays on --sans regardless */
+  --book-font:var(--serif);
+  --fs:19px; --measure:34em;
+}
+:root[data-theme=dark]{
+  --bg:#121212; --panel:#1a1a1a; --ink:#e6e3dd; --ink-soft:#9b9689; --ink-faint:#6a655c;
+  --line:#2e2c28; --accent-soft:#252320; --accent:#d09a9a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--book-font);
+  -webkit-text-size-adjust:100%;overflow-wrap:break-word}
+
+/* ---------- chrome ---------- */
+/* Always on screen: the chapter you are in is the one thing you lose track of
+   while scrolling, so the header does not auto-hide. */
+header{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:10px;
+  padding:9px 14px;background:var(--bg);border-bottom:1px solid var(--line);
+  font-family:var(--sans);font-size:13px}
+header .bk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30%;
+  color:var(--ink-faint)}
+header .ch{font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header button{font-family:inherit;font-size:13px;background:none;border:1px solid var(--line);
+  border-radius:7px;padding:5px 9px;color:var(--ink);cursor:pointer;white-space:nowrap}
+header button.icon{border:none;font-size:19px;padding:2px 6px;line-height:1}
+header button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+@media (max-width:640px){ header .bk{display:none} header button{padding:5px 7px} }
+
+footer{position:fixed;bottom:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:12px;
+  padding:8px 14px calc(8px + env(safe-area-inset-bottom));background:var(--bg);
+  border-top:1px solid var(--line);font-family:var(--sans);font-size:13px;color:var(--ink-soft)}
+footer button{font-family:inherit;font-size:15px;background:none;border:1px solid var(--line);
+  border-radius:7px;padding:4px 13px;color:var(--ink);cursor:pointer}
+footer button:disabled{opacity:.32;cursor:default}
+footer .pg{flex:1;text-align:center;font-variant-numeric:tabular-nums}
+footer .pg b{color:var(--ink);font-size:14px}
+.bar{position:fixed;left:0;bottom:0;height:2px;background:var(--accent);z-index:51;transition:width .2s ease}
+
+/* the range bar lives inside the interpret drawer and only shows in ask mode,
+   which the widget signals with data-mode on the drawer */
+#askRangeBar{display:none;align-items:center;gap:5px;flex-wrap:wrap;
+  font-family:var(--sans);font-size:12.5px;color:var(--ink-soft);
+  padding-bottom:11px;margin-bottom:12px;border-bottom:1px solid var(--line)}
+#nrw-drawer[data-mode=ask] #askRangeBar{display:flex}
+#askRangeBar .lbl{font-weight:700;margin-right:2px}
+#askRangeBar select{font:inherit;padding:2px 4px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);color:var(--ink)}
+#askRangeBar .rng{flex-basis:100%;color:var(--ink-faint);font-size:11.5px;margin-top:3px}
+
+/* traffic readout — what this device has actually pulled over the wire */
+footer button.tf{font-size:12px;padding:4px 9px;color:var(--ink-soft);
+  font-variant-numeric:tabular-nums;min-width:62px}
+#trafficPanel{position:fixed;right:12px;bottom:52px;z-index:60;display:none;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:11px 13px;box-shadow:0 6px 24px rgba(0,0,0,.22);
+  font-family:var(--sans);font-size:12.5px;color:var(--ink);min-width:216px}
+#trafficPanel.open{display:block}
+#trafficPanel table{border-collapse:collapse;width:100%}
+#trafficPanel td{padding:2px 0;vertical-align:baseline}
+#trafficPanel td.v{text-align:right;font-variant-numeric:tabular-nums;padding-left:14px}
+#trafficPanel td.n{color:var(--ink-faint);text-align:right;padding-left:8px;font-size:11px}
+#trafficPanel tr.sum td{border-top:1px solid var(--line);padding-top:5px;font-weight:700}
+#trafficPanel .note{margin-top:7px;color:var(--ink-faint);font-size:11px;line-height:1.45}
+
+/* ---------- table of contents ---------- */
+#toc{position:fixed;top:0;left:0;bottom:0;width:min(330px,86vw);z-index:60;background:var(--panel);
+  border-right:1px solid var(--line);transform:translateX(-100%);transition:transform .25s ease;
+  display:flex;flex-direction:column;font-family:var(--sans)}
+#toc.open{transform:none}
+#toc .hd{display:flex;align-items:center;padding:13px 15px;border-bottom:1px solid var(--line);font-weight:700;font-size:14px}
+#toc .hd button{margin-left:auto;background:none;border:none;font-size:22px;color:var(--ink-soft);cursor:pointer;line-height:1}
+#toc .ls{overflow-y:auto;padding:6px 0;flex:1}
+#toc a{display:flex;gap:10px;padding:9px 15px;text-decoration:none;color:var(--ink);font-size:14px;line-height:1.4}
+#toc a:hover{background:var(--accent-soft)}
+#toc a.on{background:var(--accent-soft);font-weight:700}
+#toc a .p{margin-left:auto;color:var(--ink-faint);font-size:12px;font-variant-numeric:tabular-nums}
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.34);z-index:55;display:none}
+#scrim.on{display:block}
+
+/* ---------- the book: base typography ---------- */
+/* Deliberately generic. The book's own stylesheet (/api/book.css, linked below)
+   supplies the structural typography its classes stand for — hanging indents,
+   captions, verse, whatever this particular publisher used — because that is
+   spelled differently in every book and only the book knows. These rules are
+   the floor under it, for books whose CSS is missing or threadbare. */
+/* The reader's text size lives on `main`, not on #article, and deliberately so.
+   A book's own stylesheet routinely carries a body-level `font-size:1em`, which
+   once scoped becomes `#article.<bodyclass>` — one class more specific than
+   `#article`, so it would win and pin the text to 16px whatever the reader chose.
+   Set a step above and the publisher's em values multiply our size instead of
+   replacing it, which is what em was for. */
+main{max-width:var(--measure);margin:0 auto;padding:64px 20px 84px;font-size:var(--fs)}
+#article{line-height:1.72;text-align:justify;hyphens:auto}
+#article p{margin:0 0 1em}
+#article h1,#article h2,#article h3,#article h4{font-weight:700;line-height:1.25;
+  text-align:left;hyphens:none}
+#article h1{font-size:1.55em;margin:1.6em 0 1.2em}
+#article h2{font-size:1.2em;margin:1.8em 0 .5em}
+#article h3{font-size:1.05em;margin:1.4em 0 .4em}
+#article>:first-child{margin-top:0}
+#article blockquote{margin:1em 1.6em}
+#article ul,#article ol{padding-left:1.5em}
+</style>
+
+<!-- the book styling its own classes; filtered + scoped server-side -->
+<link rel="stylesheet" href="/api/book.css">
+
+<style>
+/* ---------- overrides that must win over the book's stylesheet ---------- */
+/* cross-references can be everywhere (an index runs to a thousand of them);
+   underlining them all turns the page into noise, so they show on hover only */
+#article a{color:inherit;text-decoration:none}
+#article a:hover{text-decoration:underline;text-decoration-color:var(--accent);
+  text-underline-offset:3px}
+
+/* figures start as a small server-made thumbnail; click loads the full image */
+#article figure{margin:1.4em 0;display:flex;gap:12px;align-items:flex-start;text-align:left}
+#article figure.full{display:block;text-align:center;margin:1.8em 0}
+#article img{max-width:100%;height:auto;border-radius:2px}
+#article figure img{width:96px;flex:none;cursor:zoom-in;background:var(--accent-soft);
+  border:1px solid var(--line)}
+#article figure.full img{width:auto;max-width:100%;cursor:zoom-out;border:none;background:none}
+#article figure figcaption{margin:0;flex:1;text-align:left}
+#article figure figcaption::after{content:" ⤢ 点开";font-family:var(--sans);font-size:.86em;
+  color:var(--ink-faint);white-space:nowrap}
+#article figure.full figcaption::after{content:""}
+#article figure img.loading{opacity:.45}
+#article .cover-img{width:min(300px,62vw);max-height:78vh;cursor:zoom-in}
+#article figure.cover{display:block;text-align:center}
+
+/* The publisher's column widths are set for a 6-inch page and squeeze content at
+   our measure, so they are dropped and tables size to their contents. Their cell
+   padding is often 1px, which relied on those widths for separation — hence the
+   :not() here, specific enough to outrank a publisher class and put the gap back.
+   Vertical spacing is left to the book. */
+#article table{border-collapse:collapse;margin:1.2em 0;width:100%}
+#article td,#article th{vertical-align:top}
+#article tr>td:not(:last-child),#article tr>th:not(:last-child){padding-right:1.4em}
+
+/* Printed page boundaries, where the epub records them as page-break markers.
+   The marker is an inline span, often sitting mid-sentence; making it display as
+   a block splits the paragraph exactly where the paper page ended, which is what
+   the boundary actually is. */
+/* Given room to breathe and a centred folio, the way a printed page break reads:
+   the gap is the pause, and the number tells you how far you have come. */
+#article .pgmark{display:block;height:0;margin:2.5em 0;position:relative;
+  text-align:center;border-top:1px solid var(--line);
+  scroll-margin-top:78px;user-select:none;-webkit-user-select:none}
+#article .pgmark::before{content:attr(data-page);
+  position:absolute;left:50%;transform:translateX(-50%);top:-.86em;
+  background:var(--bg);padding:0 1em;
+  font-family:var(--sans);font-size:12.5px;font-weight:700;letter-spacing:.14em;
+  color:var(--ink-soft)}
+/* the page you are on, so the rhythm has a beat you can find */
+#article .pgmark.here{border-top-color:var(--accent)}
+#article .pgmark.here::before{color:var(--accent)}
+/* a marker opening the chapter would draw a rule above the title */
+#article>:first-child .pgmark:first-child,
+#article>.pgmark:first-child{display:none}
+
+.status{padding:3em 0;text-align:center;color:var(--ink-soft);font-family:var(--sans);font-size:14px}
+.status.err{color:#c0392b}
+@media (max-width:640px){ main{padding:58px 16px 78px} }
+</style>
+</head>
+<body>
+
+<header>
+  <button class="icon" id="tocBtn" title="目录">☰</button>
+  <span class="bk" id="bkTitle">…</span>
+  <span class="ch" id="chTitle"></span>
+  <button id="askBtn" title="把当前页附近的原文交给模型，你自己提问">提问</button>
+  <button class="icon nrw-gear" id="gear" title="设置">⚙</button>
+</header>
+
+<!-- moved into the interpret drawer on load, so the question and every follow-up
+     share one input and the range can still be widened mid-conversation -->
+<div id="askRangeBar">
+  <span class="lbl">范围</span>
+  往前 <select id="askBack"></select> 页
+  往后 <select id="askFwd"></select> 页
+  <span class="rng" id="askRange"></span>
+</div>
+
+<nav id="toc">
+  <div class="hd">目录<button id="tocClose">×</button></div>
+  <div class="ls" id="tocList"></div>
+</nav>
+<div id="scrim"></div>
+
+<main>
+  <div id="article"><div class="status">载入中…</div></div>
+</main>
+
+<footer>
+  <button id="prevBtn" title="上一页 ←">‹</button>
+  <span class="pg" id="pageInfo"></span>
+  <button id="nextBtn" title="下一页 →">›</button>
+  <button id="trafficBtn" class="tf" title="本次会话的流量（点开看明细）">0 B</button>
+</footer>
+<div id="trafficPanel"></div>
+<div class="bar" id="bar" style="width:0"></div>
+
+<script src="/static/interpret-widget.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const article = $('#article');
+
+let BOOK = null;            // /api/book payload
+let CHAPTER = null;         // /api/chapter/{n} payload
+let PAGES = [];             // flat printed-page index across the whole book
+let pageAt = new Map();     // "pg-4" -> position in PAGES
+// Chapters stay in memory once fetched, so paging back over a chapter boundary
+// (or re-reading a chapter) costs nothing. The whole book is ~380 KB of text,
+// so there is no reason to evict. Nothing is prefetched: a chapter is only
+// fetched when you actually turn onto it.
+const chapterCache = new Map();
+
+// ---------- boot ----------
+(async function init(){
+  try {
+    BOOK = await (await fetch('/api/book')).json();
+  } catch (e) {
+    article.innerHTML = '<div class="status err">载不到书：' + esc(e.message) + '</div>';
+    return;
+  }
+  PAGES = BOOK.pages || [];
+  PAGES.forEach((p, i) => pageAt.set(p.id, i));
+  $('#bkTitle').textContent = BOOK.title;
+  document.title = BOOK.title;
+  // hyphenation and quotes are language-dependent; take the book's own metadata
+  if (BOOK.language) article.lang = BOOK.language;
+  buildToc();
+
+  // route: #/c/9/anchor  >  saved progress  >  first chapter with text
+  const r = parseHash();
+  if (r) return loadChapter(r.idx, r.anchor);
+  let saved = null;
+  try { saved = await (await fetch('/api/progress')).json(); } catch (_) {}
+  if (saved && Number.isInteger(saved.chapter)) return loadChapter(saved.chapter, saved.anchor);
+  loadChapter(0);
+})();
+
+function parseHash(){
+  const m = location.hash.match(/^#\/c\/(\d+)(?:\/(.+))?$/);
+  return m ? { idx: +m[1], anchor: m[2] || '' } : null;
+}
+window.addEventListener('hashchange', () => {
+  const r = parseHash();
+  if (r && (!CHAPTER || r.idx !== CHAPTER.idx || r.anchor)) loadChapter(r.idx, r.anchor);
+});
+
+// ---------- table of contents ----------
+function buildToc(){
+  const ls = $('#tocList');
+  ls.innerHTML = '';
+  // spine order, labelled by the TOC where it has a label
+  const label = new Map((BOOK.toc || []).map(t => [t.chapter, t.label]));
+  BOOK.chapters.forEach(c => {
+    const name = label.get(c.idx) || c.title;
+    if (!name) return;                       // skip untitled filler (cover, blanks)
+    const a = document.createElement('a');
+    a.href = '#/c/' + c.idx;
+    a.dataset.idx = c.idx;
+    a.innerHTML = '<span>' + esc(name) + '</span>' +
+      (c.pages ? '<span class="p">' + esc(firstPageOf(c.idx)) + '</span>' : '');
+    a.onclick = () => closeToc();
+    ls.appendChild(a);
+  });
+}
+function firstPageOf(idx){
+  const p = PAGES.find(p => p.chapter === idx);
+  return p ? p.page : '';
+}
+/** Always something to show in the header, even for untitled filler documents. */
+function chapterName(idx){
+  const t = (BOOK.toc || []).find(t => t.chapter === idx);
+  const c = (BOOK.chapters || []).find(c => c.idx === idx);
+  return (t && t.label) || (c && c.title) || '第 ' + (idx + 1) + ' 节';
+}
+function markToc(idx){
+  document.querySelectorAll('#tocList a').forEach(a =>
+    a.classList.toggle('on', +a.dataset.idx === idx));
+}
+function openToc(){
+  $('#toc').classList.add('open'); $('#scrim').classList.add('on');
+  const on = $('#tocList a.on'); if (on) on.scrollIntoView({block:'center'});
+}
+function closeToc(){ $('#toc').classList.remove('open'); $('#scrim').classList.remove('on'); }
+$('#tocBtn').onclick = openToc;
+$('#tocClose').onclick = closeToc;
+$('#scrim').onclick = closeToc;
+
+// ---------- chapters ----------
+async function loadChapter(idx, anchor){
+  const cached = chapterCache.get(idx);
+  if (cached) {
+    CHAPTER = cached;
+  } else {
+    article.innerHTML = '<div class="status">载入中…</div>';
+    try {
+      const r = await fetch('/api/chapter/' + idx);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      CHAPTER = await r.json();
+      chapterCache.set(idx, CHAPTER);
+    } catch (e) {
+      article.innerHTML = '<div class="status err">这一章载入失败：' + esc(e.message) + '</div>';
+      return;
+    }
+  }
+  article.innerHTML = CHAPTER.html || '<div class="status">（本页无正文）</div>';
+  // carry the source <body class>, so body-level rules in the book's own
+  // stylesheet still apply to our container
+  article.className = CHAPTER.body_class || '';
+  setupFigures();
+  setupTables();
+  $('#chTitle').textContent = chapterName(CHAPTER.idx);
+  markToc(idx);
+  // keep the URL in step without re-triggering hashchange
+  const want = '#/c/' + idx;
+  if (location.hash !== want && !anchor) history.replaceState(null, '', want);
+
+  if (anchor) {
+    const el = document.getElementById(anchor);
+    if (el) el.scrollIntoView();
+    else window.scrollTo(0, 0);
+  } else {
+    window.scrollTo(0, 0);
+  }
+  updatePage();
+  saveProgress();
+}
+
+// ---------- figures: thumbnail until asked for ----------
+// src already points at a server-downscaled thumbnail, so the full image (up to
+// 70 KB each) is never fetched until it is clicked.
+function setupFigures(){
+  article.querySelectorAll('img[data-full]').forEach(img => {
+    const w = +img.dataset.w, h = +img.dataset.h;
+    if (w && h) img.style.aspectRatio = w + '/' + h;      // reserve the right shape
+    const fig = img.closest('figure');
+    if (fig && img.classList.contains('cover-img')) fig.classList.add('cover');
+    img.addEventListener('click', () => toggleFigure(img));
+  });
+}
+function toggleFigure(img){
+  const fig = img.closest('figure') || img.parentElement;
+  const thumb = img.dataset.thumb || img.getAttribute('src');
+  if (fig.classList.contains('full')) {                   // collapse back
+    fig.classList.remove('full');
+    img.src = thumb;
+    return;
+  }
+  img.dataset.thumb = thumb;
+  fig.classList.add('full');
+  img.classList.add('loading');
+  const full = img.dataset.full;
+  const probe = new Image();
+  probe.onload = () => { img.src = full; img.classList.remove('loading'); };
+  probe.onerror = () => img.classList.remove('loading');
+  probe.src = full;
+}
+
+// ---------- tables ----------
+// The publisher's <col width> percentages are dropped (they are set for a 6-inch
+// page), so auto-layout can shrink a label column below its content and break
+// "c. 1220??" across two lines. Any column whose every cell is short is a label
+// column, so let it size to its content instead.
+const LABEL_COL_MAX = 14;
+function setupTables(){
+  article.querySelectorAll('table').forEach(table => {
+    const rows = [...table.rows];
+    if (!rows.length) return;
+    const cols = Math.max(...rows.map(r => r.cells.length));
+    for (let c = 0; c < cols; c++) {
+      const cells = rows.map(r => r.cells[c]).filter(Boolean);
+      if (cells.length < rows.length) continue;             // ragged / spanned
+      if (cells.every(td => td.textContent.trim().length <= LABEL_COL_MAX))
+        cells.forEach(td => { td.style.whiteSpace = 'nowrap'; });
+    }
+  });
+}
+
+// ---------- printed-page navigation ----------
+function marks(){ return [...article.querySelectorAll('.pgmark')]; }
+
+/** The page you are on = the last printed-page mark at or above the top of the text. */
+function currentMark(){
+  const ms = marks();
+  if (!ms.length) return null;
+  const top = 74;
+  let cur = ms[0];
+  for (const m of ms) {
+    if (m.getBoundingClientRect().top <= top) cur = m; else break;
+  }
+  return cur;
+}
+/** True when the epub records printed page boundaries; many do not. */
+const hasPrintPages = () => PAGES.length > 0;
+
+function updatePage(){
+  const info = $('#pageInfo'), bar = $('#bar');
+  if (!hasPrintPages()) {
+    // no printed pages in this book: report position within the chapter
+    // the header already names the chapter, so this only reports position
+    const chN = BOOK ? BOOK.chapters.length : 0;
+    const frac = docFraction();
+    info.innerHTML = CHAPTER
+      ? (CHAPTER.idx + 1) + ' / ' + chN + ' <span style="opacity:.55">· ' +
+        Math.round(frac * 100) + '%</span>'
+      : '';
+    bar.style.width = (((CHAPTER ? CHAPTER.idx : 0) + frac) / Math.max(chN, 1) * 100).toFixed(2) + 'vw';
+    $('#prevBtn').disabled = !CHAPTER || (CHAPTER.prev === null && window.scrollY <= 0);
+    $('#nextBtn').disabled = !CHAPTER || (CHAPTER.next === null && frac >= 0.999);
+    return;
+  }
+  const m = currentMark();
+  marks().forEach(x => x.classList.toggle('here', x === m));
+  const pos = m ? pageAt.get(m.id) : undefined;
+  if (pos === undefined) {
+    info.innerHTML = '<span style="opacity:.55">—</span>';
+    bar.style.width = '0';
+  } else {
+    info.innerHTML = 'p. <b>' + esc(PAGES[pos].page) + '</b> · ' + (pos + 1) + ' / ' + PAGES.length;
+    bar.style.width = ((pos + 1) / PAGES.length * 100).toFixed(2) + 'vw';
+  }
+  $('#prevBtn').disabled = pos === 0 && (!CHAPTER || CHAPTER.prev === null);
+  $('#nextBtn').disabled = pos === PAGES.length - 1;
+}
+
+function docFraction(){
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  return max > 0 ? Math.min(1, window.scrollY / max) : 1;
+}
+
+/** One page forward or back, crossing chapter boundaries.
+ *
+ *  Uses the printed page boundaries when the epub has them, so the page numbers
+ *  match the paper book. Otherwise pages by screenful, which is what a book
+ *  without recorded pagination can honestly offer.
+ */
+async function goPage(delta){
+  if (!hasPrintPages()) return goScreen(delta);
+  const m = currentMark();
+  let pos = m ? pageAt.get(m.id) : (delta > 0 ? -1 : 0);
+  const next = pos + delta;
+  if (next < 0 || next >= PAGES.length) return;
+  const target = PAGES[next];
+  if (!CHAPTER || target.chapter !== CHAPTER.idx) {
+    await loadChapter(target.chapter, target.id);
+  } else {
+    const el = document.getElementById(target.id);
+    if (el) el.scrollIntoView();
+  }
+  updatePage();
+}
+
+/** Screen-at-a-time paging, with a little overlap so no line is skipped. */
+async function goScreen(delta){
+  const step = Math.max(120, window.innerHeight - 120);
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const y = window.scrollY + delta * step;
+  if (y < 0 && CHAPTER && CHAPTER.prev !== null) {
+    await loadChapter(CHAPTER.prev);
+    window.scrollTo(0, document.documentElement.scrollHeight);   // land at its end
+  } else if (y > max + 4 && CHAPTER && CHAPTER.next !== null) {
+    await loadChapter(CHAPTER.next);
+  } else {
+    window.scrollTo({ top: Math.max(0, Math.min(y, max)) });
+  }
+  updatePage();
+}
+$('#prevBtn').onclick = () => goPage(-1);
+$('#nextBtn').onclick = () => goPage(1);
+
+function goChapter(delta){
+  if (!CHAPTER) return;
+  const t = delta < 0 ? CHAPTER.prev : CHAPTER.next;
+  if (t !== null && t !== undefined) loadChapter(t);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'ArrowRight')      { e.preventDefault(); e.shiftKey ? goChapter(1) : goPage(1); }
+  else if (e.key === 'ArrowLeft')  { e.preventDefault(); e.shiftKey ? goChapter(-1) : goPage(-1); }
+  else if (e.key === 't')                        { openToc(); }
+  else if (e.key === '+' || e.key === '=')       { bumpFont(1); }
+  else if (e.key === '-' || e.key === '_')       { bumpFont(-1); }
+});
+
+// ---------- reading position ----------
+let saveTimer = null;
+function saveProgress(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (!CHAPTER) return;
+    const m = currentMark();
+    fetch('/api/progress', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ chapter: CHAPTER.idx, anchor: m ? m.id : '', page: m ? m.dataset.page : '' }),
+    }).catch(() => {});
+  }, 1200);
+}
+
+// ---------- ask about a run of pages ----------
+// The reader chooses how much goes in and asks their own question. Deliberately
+// not a summary button: it answers what you ask about pages you are reading,
+// rather than standing in for reading them.
+const ASK_MAX = 10;
+
+/** Which pages a question is about — the server reads the text from the epub, so
+ *  nothing but these numbers goes up, and follow-ups re-send nothing at all. */
+function askRange(){
+  const m = currentMark();
+  if (!hasPrintPages() || !m) return { chapter: CHAPTER.idx };   // no printed pages
+  const cur = pageAt.get(m.id);
+  return {
+    page_from: Math.max(0, cur - +$('#askBack').value),
+    page_to: Math.min(PAGES.length - 1, cur + +$('#askFwd').value),
+  };
+}
+
+/** Ask the server how big that range is, without transferring it. */
+async function askRangeMeta(range){
+  const qs = new URLSearchParams(range).toString();
+  try {
+    return await (await fetch('/api/passage?' + qs)).json();
+  } catch (e) {
+    return { chars: 0, label: '范围读取失败：' + e.message };
+  }
+}
+
+(function buildAsk(){
+  const opts = (sel, def) => {
+    for (let i = 0; i <= ASK_MAX; i++) {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = i;
+      if (i === def) o.selected = true;
+      sel.appendChild(o);
+    }
+  };
+  opts($('#askBack'), +(localStorage.getItem('br_ask_back') ?? 1));
+  opts($('#askFwd'),  +(localStorage.getItem('br_ask_fwd')  ?? 0));
+})();
+
+/** Recompute the range and hand it to the open session, mid-conversation or not. */
+async function refreshAskRange(){
+  localStorage.setItem('br_ask_back', $('#askBack').value);
+  localStorage.setItem('br_ask_fwd', $('#askFwd').value);
+  $('#askRange').textContent = '读取中…';
+  const range = askRange();
+  const meta = await askRangeMeta(range);
+  const desc = meta.chars
+    ? `${meta.label} · ${meta.chars.toLocaleString()} 字符`
+    : (meta.label || '这个范围里没有正文');
+  $('#askRange').textContent = desc;
+  // patch the live session, so widening the window applies from the next turn on
+  if (window.Interpret) Interpret.update({ extra: range, ctxLabel: '模型看到 ' + desc });
+  return meta;
+}
+$('#askBack').onchange = refreshAskRange;
+$('#askFwd').onchange = refreshAskRange;
+
+async function openAsk(){
+  if (!CHAPTER || !window.Interpret) return;
+  const range = askRange();
+  const meta = await askRangeMeta(range);
+  const desc = meta.chars
+    ? `${meta.label} · ${meta.chars.toLocaleString()} 字符`
+    : (meta.label || '这个范围里没有正文');
+  $('#askRange').textContent = desc;
+  const m = currentMark();
+  // no question yet: the drawer opens and waits for it, so the first question
+  // and every follow-up go through the same box
+  Interpret.open({
+    extra: range, awaitQuestion: true, noMarker: true,
+    inputHint: '问这几页… （回车发送）',
+    ctxLabel: '模型看到 ' + desc,
+    book: BOOK.title, author: BOOK.author,
+    chapter: CHAPTER.idx, chapter_title: chapterName(CHAPTER.idx),
+    page: m ? m.dataset.page : '',
+  }, false, 'ask');
+}
+$('#askBtn').onclick = openAsk;
+
+// the bar is authored in this page but belongs in the drawer, above the passage
+(function moveAskBar(){
+  const db = document.querySelector('#nrw-drawer .db');
+  if (db) db.insertBefore($('#askRangeBar'), db.firstChild);
+})();
+
+// ---------- settings ----------
+$('#gear').onclick = () => { if (window.Interpret) { Interpret.settings(); ensureFontGroup(); } };
+
+// ---------- selection -> interpretation ----------
+// The selection is grown outward until there is real context on both sides, then
+// trimmed back to sentence boundaries, so the model always sees whole sentences.
+const MIN_CTX_SIDE = 160;
+const SENT_END = /[.!?。！？…]/g;
+const BLOCKS = 'p,li,blockquote,h1,h2,h3,figcaption,td';
+
+function blockOf(node){
+  const el = node && (node.nodeType === 3 ? node.parentNode : node);
+  return el ? (el.closest(BLOCKS) || article) : article;
+}
+function trimLeft(text, min){                   // keep the tail, cut at a sentence start
+  if (text.length <= min) return text;
+  const limit = text.length - min;
+  let idx = -1;
+  for (const m of text.matchAll(SENT_END)) { if (m.index < limit) idx = m.index; else break; }
+  return idx >= 0 ? '…' + text.slice(idx + 1).replace(/^\s+/, '') : text;
+}
+function trimRight(text, min){                  // keep the head, cut at a sentence end
+  if (text.length <= min) return text;
+  for (const m of text.matchAll(SENT_END)) { if (m.index >= min) return text.slice(0, m.index + 1) + '…'; }
+  return text;
+}
+function buildContext(sel){
+  try {
+    const range = sel.getRangeAt(0);
+    const blocks = [...article.querySelectorAll(BLOCKS)];
+    const startBlock = blockOf(range.startContainer), endBlock = blockOf(range.endContainer);
+    let lr = document.createRange(); lr.selectNodeContents(startBlock);
+    lr.setEnd(range.startContainer, range.startOffset);
+    let left = lr.toString(), bi = blocks.indexOf(startBlock);
+    while (left.length < MIN_CTX_SIDE && bi - 1 >= 0) { bi--; left = blocks[bi].innerText + ' ' + left; }
+    let rr = document.createRange(); rr.selectNodeContents(endBlock);
+    rr.setStart(range.endContainer, range.endOffset);
+    let right = rr.toString(), ei = blocks.indexOf(endBlock);
+    while (right.length < MIN_CTX_SIDE && ei !== -1 && ei + 1 < blocks.length) { ei++; right += ' ' + blocks[ei].innerText; }
+    left = trimLeft(left.replace(/\s+/g, ' '), MIN_CTX_SIDE);
+    right = trimRight(right.replace(/\s+/g, ' '), MIN_CTX_SIDE);
+    const s = sel.toString();
+    const lsp = left && !/\s$/.test(left) ? left + ' ' : left;
+    const rsp = right && !/^\s/.test(right) ? ' ' + right : right;
+    return { ctx: (lsp + s + rsp).trim(), left: lsp, sel: s, right: rsp };
+  } catch (_) { const s = sel.toString(); return { ctx: s, left: '', sel: s, right: '' }; }
+}
+
+document.addEventListener('mouseup', handleSelect);
+document.addEventListener('touchend', handleSelect, {passive:true});
+function handleSelect(e){
+  if (e.target.closest && e.target.closest('.nrw-pop')) return;
+  setTimeout(() => {
+    const sel = window.getSelection();
+    const text = sel.toString().trim();
+    if (!text) { Interpret.hidePopup(); return; }
+    const node = sel.anchorNode;
+    const el = node ? (node.nodeType === 3 ? node.parentNode : node) : null;
+    if (!el || !article.contains(el)) { Interpret.hidePopup(); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect.width && !rect.height) { Interpret.hidePopup(); return; }
+    const parts = buildContext(sel);
+    const m = currentMark();
+    Interpret.popupAt(rect, {
+      text, context: parts.ctx, parts,
+      book: BOOK ? BOOK.title : '', author: BOOK ? BOOK.author : '',
+      chapter: CHAPTER ? CHAPTER.idx : -1,
+      chapter_title: CHAPTER ? chapterName(CHAPTER.idx) : '',
+      page: m ? m.dataset.page : '',
+    }, window.matchMedia('(pointer: coarse)').matches);
+  }, 10);
+}
+document.addEventListener('mousedown', (e) => {
+  if (!(e.target.closest && e.target.closest('.nrw-pop'))) Interpret.hidePopup();
+});
+
+// ---------- scroll: page readout and progress ----------
+let raf = 0;
+window.addEventListener('scroll', () => {
+  Interpret.hidePopup();
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; updatePage(); });
+  saveProgress();
+}, {passive:true});
+
+// ---------- traffic ----------
+// Measured in the browser, not on the server: transferSize is what this device
+// actually pulled over the wire, after gzip and after cache hits (a cached
+// response reports 0, which is the truth — it cost nothing). A
+// PerformanceObserver accumulates continuously; the resource buffer alone holds
+// only a couple of hundred entries and would silently drop the rest.
+const TRAFFIC = { page: [0,0], chapter: [0,0], thumb: [0,0], image: [0,0], llm: [0,0], other: [0,0] };
+const TRAFFIC_ROWS = [
+  ['chapter', '正文'], ['thumb', '缩略图'], ['image', '全图'],
+  ['llm', '解读'], ['page', '页面/脚本'], ['other', '其他'],
+];
+
+function bucketOf(url){
+  if (url.includes('/api/interpret')) return 'llm';
+  if (url.includes('/api/chapter/') || url.includes('/api/book')) return 'chapter';
+  if (url.includes('/api/res/')) return url.includes('w=') ? 'thumb' : 'image';
+  if (/\.(css|js)(\?|$)/.test(url) || url.endsWith('/read')) return 'page';
+  return 'other';
+}
+function addEntries(entries){
+  for (const e of entries) {
+    const b = TRAFFIC[bucketOf(e.name)];
+    // transferSize includes headers; encodedBodySize is the fallback when a
+    // cross-origin-ish entry hides it. Both are 0 for a cache hit.
+    b[0] += e.transferSize || e.encodedBodySize || 0;
+    b[1] += 1;
+  }
+  renderTraffic();
+}
+try {
+  // The HTML document is a "navigation" entry, not a "resource" one, so it is
+  // absent from the list below and has to be added by hand — and it is the
+  // single largest item, so leaving it out understated every reading.
+  addEntries(performance.getEntriesByType('navigation'));
+  new PerformanceObserver(l => addEntries(l.getEntries())).observe({type: 'resource', buffered: true});
+} catch (_) { /* no Resource Timing: the readout just stays at zero */ }
+
+function fmtBytes(n){
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
+}
+function renderTraffic(){
+  const total = Object.values(TRAFFIC).reduce((a, b) => a + b[0], 0);
+  $('#trafficBtn').textContent = fmtBytes(total);
+  const panel = $('#trafficPanel');
+  if (!panel.classList.contains('open')) return;
+  const rows = TRAFFIC_ROWS.filter(([k]) => TRAFFIC[k][1])
+    .map(([k, label]) => `<tr><td>${label}</td><td class="v">${fmtBytes(TRAFFIC[k][0])}</td>` +
+                         `<td class="n">${TRAFFIC[k][1]}</td></tr>`).join('');
+  panel.innerHTML = '<table>' + rows +
+    `<tr class="sum"><td>合计</td><td class="v">${fmtBytes(total)}</td><td class="n"></td></tr></table>` +
+    '<div class="note">浏览器实测上行下行字节，已含 gzip；命中缓存的请求算 0。' +
+    '图片默认只取缩略图，点开才取全图。</div>';
+}
+$('#trafficBtn').onclick = () => { $('#trafficPanel').classList.toggle('open'); renderTraffic(); };
+document.addEventListener('mousedown', (e) => {
+  const p = $('#trafficPanel');
+  if (p.classList.contains('open') && !p.contains(e.target) && e.target !== $('#trafficBtn'))
+    p.classList.remove('open');
+});
+
+// ---------- display settings ----------
+// Font size and theme are the widget's: it owns the ⚙ menu, and persists them.
+// Calling its API rather than reimplementing keeps one source of truth for the
+// clamping and the storage keys.
+function bumpFont(delta){
+  if (window.Interpret && Interpret.bumpFont) Interpret.bumpFont(delta);
+}
+
+// ---- reading face ----
+// The ⚙ menu belongs to the widget, which is shared with the news reader; this
+// group is injected from here instead of added there, so the widget stays close
+// to its original and fixes can still be carried between the two.
+const FONTS = {
+  serif: ['衬线', 'var(--serif)'],
+  sans:  ['无衬线', 'var(--sans)'],
+};
+function applyFont(key){
+  const f = FONTS[key] || FONTS.serif;
+  document.documentElement.style.setProperty('--book-font', f[1]);
+  localStorage.setItem('br_font', FONTS[key] ? key : 'serif');
+  markFont();
+}
+function markFont(){
+  const cur = localStorage.getItem('br_font') || 'serif';
+  document.querySelectorAll('#nrw-menu .bf').forEach(b =>
+    b.classList.toggle('on', b.dataset.f === cur));
+}
+function ensureFontGroup(){
+  const menu = document.getElementById('nrw-menu');
+  if (!menu || menu.querySelector('.br-fonts')) return;
+  const grp = document.createElement('div');
+  grp.className = 'grp br-fonts';
+  grp.innerHTML = '<span class="lbl">字体</span>' + Object.entries(FONTS)
+    .map(([k, f]) => `<button class="sb bf" data-f="${k}">${f[0]}</button>`).join('');
+  const groups = menu.querySelectorAll('.grp');
+  menu.insertBefore(grp, groups[2] || null);      // just after 字号
+  grp.querySelectorAll('.bf').forEach(b => b.onclick = () => applyFont(b.dataset.f));
+  markFont();
+}
+
+(function applySaved(){
+  const t = localStorage.getItem('nrw_theme');
+  document.documentElement.dataset.theme =
+    t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  // seed the shared key so the ⚙ menu's A−/A+ start from the reader's default
+  if (!localStorage.getItem('nrw_fs')) localStorage.setItem('nrw_fs', '19');
+  document.documentElement.style.setProperty(
+    '--fs', parseInt(localStorage.getItem('nrw_fs'), 10) + 'px');
+  applyFont(localStorage.getItem('br_font') || 'serif');
+})();
+
+function esc(s){ return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+</body>
+</html>
