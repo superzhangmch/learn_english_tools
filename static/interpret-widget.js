@@ -9,9 +9,16 @@
  *
  * API:
  *   Interpret.popupAt(rect, payload, below)  show the ✨ button near a selection
- *   Interpret.open(payload)                  open the drawer directly
+ *   Interpret.open(payload, deferred, mode)  start a session; returns it
+ *       deferred=true: run in the background and only drop the status dot —
+ *       nothing pops up, so the reader isn't covered. Tap the dot (or call
+ *       open() again with the same payload) to view it.
  *   Interpret.hidePopup() / Interpret.close()
- *   payload = { text, title, context, parts:{left,sel,right} }   (parts optional)
+ *   payload = { text, title, context, parts:{left,sel,right}, anchor, key }
+ *       parts/anchor/key all optional. anchor = element to hang the status dot
+ *       after (required when triggered by a button, not by a selection).
+ *       Sessions are de-duplicated by mode+text+context (override with key),
+ *       so asking the same thing twice reuses the answer instead of re-requesting.
  */
 (function () {
   const BASE = (window.INTERPRET_BASE || '').replace(/\/$/, '');
@@ -98,6 +105,15 @@
 
   let pop, drawer, thread, selBox, input, sendBtn, menuEl;
   let payload = {}, pendingRange = null, active = null;
+  // 会话去重: key -> session。key 默认由「请求内容」自动算出(mode + 选中文字 + 上下文),
+  // 所以同一个词/同一条标题不论是连点按钮、还是再选一次再点 ✨, 都只发一次请求, 第二次
+  // 起直接把已有会话(哪怕还在流式)重新打开。追问产生的多轮也一并保留在里面。
+  // 换个词、换个上下文、或切 解读/语法, key 就不同, 照常发新请求。
+  const keyed = new Map();
+  const sessKey = (pl, mode) =>
+    // 分隔符用正文不可能出现的控制字符, 否则 text/context 的边界会串味,
+    // 例如 text='ab',ctx='c' 会和 text='a',ctx='bc' 撞成同一个 key
+    [mode || 'interpret', pl.text || '', pl.context || pl.title || ''].join('\u0001');
   const isMobile = () => window.matchMedia('(max-width:640px)').matches;
   const isOpen = () => drawer && drawer.classList.contains('open');
 
@@ -228,6 +244,13 @@
     drawer.addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; sw = true; }, { passive: true });
     drawer.addEventListener('touchend', (e) => {
       if (!sw) return; sw = false;
+      // 在抽屉里选字复制时, "长按拖动扩大选区" 和 "滑动关闭" 是同一个手势。不挡一下的话
+      // 抽屉会在选字过程中滑走, 选区连同 iOS 的复制菜单一起消失 —— 表现就是"答案没法复制"。
+      // 所以只要抽屉内还有未折叠的选区, 这次触摸就不当滑动处理。
+      try {
+        const g = window.getSelection();
+        if (g && g.rangeCount && !g.isCollapsed && g.anchorNode && drawer.contains(g.anchorNode)) return;
+      } catch (_) { /* 拿不到选区就按原逻辑走 */ }
       const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
       const db = drawer.querySelector('.db');
       if (dx > 80 && Math.abs(dx) > Math.abs(dy) * 1.4) close();
@@ -297,11 +320,14 @@
   function close() { if (drawer) drawer.classList.remove('open'); }   // background sessions keep running
 
   // inline ✨ marker dropped right where the user selected (mobile deferred mode)
-  function makeMarker(s) {
+  // `anchor` (可选): 直接把点放在这个元素后面。程序化触发(按钮)时必须传, 因为那时
+  // pendingRange 是上一次选中留下的过期选区, 会把点插到毫无关系的位置去。
+  function makeMarker(s, anchor) {
     const mk = document.createElement('span'); mk.className = 'nrw-mk busy';  // plain dot, no glyph
     mk.onclick = (e) => { e.stopPropagation(); openSession(s); };
     try {
-      if (pendingRange) { const r = pendingRange.cloneRange(); r.collapse(false); r.insertNode(mk); }
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mk, anchor.nextSibling);
+      else if (pendingRange) { const r = pendingRange.cloneRange(); r.collapse(false); r.insertNode(mk); }
       else document.body.appendChild(mk);
     } catch (_) { document.body.appendChild(mk); }
     return mk;
@@ -315,16 +341,28 @@
 
   // mode: 'interpret' (default) or 'grammar'. deferred=true (mobile): drop an inline
   // marker + run in the background (reading isn't interrupted); tap it to view.
+  // pl.anchor(可选): marker 挂在这个元素后面(见 makeMarker), 按钮式调用要传。
+  // 去重对两条路径一视同仁: 选中文字点 ✨ 和点列表里的按钮, 只要 mode+文字+上下文相同,
+  // 就是同一个会话。pl.key 可显式指定, 不传就按内容自动算(sessKey)。
   function open(pl, deferred, mode) {
     ensureDOM();
-    const s = { payload: pl || {}, mode: mode || 'interpret', convo: [], turns: [], marker: null, abort: null, streaming: false };
-    s.marker = makeMarker(s);   // always drop a marker so you can revisit this spot
+    pl = pl || {};
+    const k = pl.key || sessKey(pl, mode);
+    if (keyed.has(k)) {   // 重复请求同一件事: 复用, 连正在流式的也直接看
+      const old = keyed.get(k);
+      openSession(old);
+      return old;
+    }
+    const s = { payload: pl, mode: mode || 'interpret', convo: [], turns: [], marker: null, abort: null, streaming: false };
+    s.marker = makeMarker(s, pl.anchor);   // always drop a marker so you can revisit this spot
+    keyed.set(k, s);      // 在 runTurn 之前登记, 连点也不会漏进第二次请求
     if (deferred) {
       runTurn(s);               // background — click the marker to view it
     } else {
       active = s; setTitle(s); renderContext(s); thread.innerHTML = ''; input.value = '';
       drawer.classList.add('open'); runTurn(s);
     }
+    return s;
   }
   function followup() {
     if (!active) return;
