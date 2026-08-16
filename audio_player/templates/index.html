@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Lyrics</title>
+  <style>
+    :root {
+      --bg: #fff;
+      --text: #111;
+      --muted: #555;
+      --surface: #f4f5f7;       /* picker background */
+      --code-bg: #fff;
+      --btn-bg: #fff;           /* track-list button bg */
+      --btn-border: #d0d7de;
+      --btn-text-muted: #999;
+      --success: #2da44e;
+      --success-text: #1a7f37;
+      --accent: #2563eb;
+      --accent-text: #fff;
+      --border-soft: #e0e2e7;   /* lyrics box border */
+      --highlight-bg: #fff59d;
+      --highlight-text: #111;
+      --badge-bg: #1a7f37;
+      --badge-text: #fff;
+      --warn-bg: #fff3cd;
+      --warn-border: #e0a800;
+      --warn-text: #8a6d00;
+      --danger: #cf222e;
+      --danger-bg: #ffebe9;
+      /* aliases for the interpret widget (follow light/dark automatically) */
+      --panel: var(--bg);
+      --ink: var(--text);
+      --ink-soft: var(--muted);
+      --line: var(--border-soft);
+      --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--bg));
+      --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", system-ui, sans-serif;
+    }
+    body.dark {
+      color-scheme: dark;
+      --bg: #000;               /* pure black per request */
+      --text: #e8e8e8;
+      --muted: #a0a0a0;
+      --surface: #0c0c0c;
+      --code-bg: #1a1a1a;
+      --btn-bg: #0c0c0c;
+      --btn-border: #2a2a2a;
+      --btn-text-muted: #666;
+      --success: #3fb950;
+      --success-text: #4ade80;
+      --accent: #3b82f6;
+      --accent-text: #fff;
+      --border-soft: #1f1f1f;
+      --highlight-bg: #6b5300;
+      --highlight-text: #fff59d;
+      --badge-bg: #238636;
+      --badge-text: #fff;
+      --warn-bg: #3a2f00;
+      --warn-border: #8a6d00;
+      --warn-text: #ffd866;
+      --danger: #ff7b72;
+      --danger-bg: #3a1614;
+      /* re-declare interpret-widget aliases here so their var() re-resolves against
+         dark --bg/--text (aliases in :root would stay frozen at light values) */
+      --panel: var(--bg);
+      --ink: var(--text);
+      --ink-soft: var(--muted);
+      --line: var(--border-soft);
+      --accent-soft: color-mix(in srgb, var(--accent) 30%, var(--bg));
+    }
+
+    html, body { background: var(--bg); color: var(--text); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", system-ui, sans-serif;
+      padding: 16px; max-width: 760px; margin: 0 auto; }
+    h2 { margin: 0 0 12px; }
+    .topbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0; }
+    /* kill iOS double-tap-to-zoom on buttons (rapid taps) without blocking pinch */
+    button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .picker { margin: 6px 0 14px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 20px; background: var(--accent); color: var(--accent-text);
+      border: none; border-radius: 999px; cursor: pointer; font-size: 15px; font-weight: 600;
+      text-decoration: none; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      transition: filter .15s ease, transform .05s ease;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn:active { transform: translateY(1px); }
+    #file-input { display: none; }
+    .picker-info { font-size: 14px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+    .picker-info code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+    #trackList { margin-top: 8px; max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      border: 1px solid var(--border-soft); border-radius: 8px; padding: 6px; }
+    .track-row { display: flex; align-items: flex-start; gap: 4px; }
+    .track-row + .track-row { margin-top: 6px; }
+    .row-num { flex: 0 0 auto; width: 1.8em; text-align: right; color: var(--muted); font-size: 12px; padding-top: 9px; }
+    .row-items { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; }
+    #trackList button {
+      margin: 4px; padding: 6px 12px; font-size: 14px;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+      border-radius: 6px; cursor: pointer;
+    }
+    #trackList button.has-local { border-color: var(--success); color: var(--success-text); }
+    #trackList button.no-local { color: var(--btn-text-muted); }
+    #trackList button.playing { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+    audio { width: 100%; }
+    #play-row { display: flex; align-items: center; gap: 4px; position: sticky; top: 0; z-index: 10;
+      background: var(--bg); margin-top: 14px; padding: 2px 0; }
+    #play-row #audio, #play-row #apl { flex: 1 1 auto; min-width: 0; margin: 0; }
+    /* keep these compact so the media control still has room for its timeline + times */
+    #play-row #edit-toggle, #play-row #go-top, #play-row #go-current, #play-row #copy-all, #play-row #fs-btn {
+      flex: 0 0 auto; font-size: 13px; padding: 4px 5px; line-height: 1; }
+
+    /* Lyrics box toolbar (edit toggle + save/cancel). */
+    #lyrics-bar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    #lyrics-bar .spacer { flex: 1; }
+    .tool-btn {
+      padding: 6px 12px; font-size: 14px; cursor: pointer;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+      border-radius: 6px;
+    }
+    .tool-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .tool-btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+    .tool-btn.primary:disabled { background: var(--btn-bg); color: var(--btn-text-muted); border-color: var(--btn-border); }
+    .tool-btn.danger { color: var(--danger); border-color: var(--danger); }
+
+    #lyrics {
+      margin-top: 10px; line-height: 1.9; min-height: 82vh; padding: 8px 4px;
+      font-size: 18px;
+    }
+    /* Edit mode: flush to the left edge (cancel body + box padding) to maximize
+       text width; let the whole window scroll; keep a right gutter to grab-scroll. */
+    #lyrics.editing {
+      max-height: none; overflow: visible;
+      margin-left: -16px; margin-right: -16px;
+      padding: 0 46px 280px 0;   /* bottom space so the fixed toolbar never covers real lines */
+      border: none; border-radius: 0;
+    }
+    #lyrics.editing .erow { padding: 5px 0; }
+    #lyrics .line { padding: 4px 0; cursor: pointer; }
+    #lyrics .highlight { background: var(--highlight-bg); color: var(--highlight-text); font-weight: 600; }
+
+    /* ---- Edit-mode rows ---- */
+    .warn-banner {
+      margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px;
+      background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text);
+      line-height: 1.5;
+    }
+    .warn-banner.ok { background: transparent; border-color: var(--success); color: var(--success-text); }
+    .erow {
+      display: flex; flex-direction: column; gap: 5px; padding: 8px 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .erow.warn { background: var(--warn-bg); }
+    .erow.err  { background: var(--danger-bg); }
+    /* all controls on one row beneath the text */
+    .erow .controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .erow .iconbtn {
+      flex: 0 0 auto; width: 42px; height: 34px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 15px; line-height: 1; cursor: pointer; border-radius: 6px;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+    }
+    .erow .iconbtn:active { background: var(--accent); color: var(--accent-text); }
+    /* ±0.5s fine time nudge */
+    .erow .nudge {
+      flex: 0 0 auto; height: 34px; padding: 0 11px; cursor: pointer;
+      font-size: 14px; font-variant-numeric: tabular-nums; border-radius: 6px;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+    }
+    .erow .nudge:active { background: var(--accent); color: var(--accent-text); }
+    /* clock = stamp this line to the current playback position */
+    .erow .clockbtn { color: var(--accent); border-color: var(--accent); }
+    /* red clock = this line has no time OR is out of order -> needs (re)stamping */
+    .erow .clockbtn.alert { color: #fff; background: var(--danger); border-color: var(--danger); }
+    /* play = preview from this line so you can judge if the timing is right */
+    .erow .playbtn { color: var(--success-text); border-color: var(--success); }
+    .erow .playbtn.previewing { background: var(--success); color: #fff; }
+    .erow .delbtn { color: var(--danger); border-color: var(--danger); }
+    /* auto-growing, naturally-wrapping text box; play button sits to its right */
+    .erow .txt-input {
+      width: 100%; box-sizing: border-box; display: block;
+      font-family: inherit; font-size: 16px; line-height: 1.4;
+      padding: 7px 10px; resize: none; overflow: hidden;
+      border: 1px solid var(--btn-border); border-radius: 8px;
+      background: var(--code-bg); color: var(--text);
+    }
+    .erow.highlight .txt-input { outline: 2px solid var(--accent); }
+    /* per-row warning badge after the play button */
+    .erow .rowflag { flex: 0 0 auto; align-self: center; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .erow .rowflag.miss { color: var(--warn-text); }
+    .erow .rowflag.inv  { color: var(--danger); }
+    /* selected row that the bottom toolbar acts on — inset bar, no layout shift */
+    .erow.selected { background: var(--surface); box-shadow: inset 4px 0 0 var(--accent); }
+
+    /* fixed bottom-center big timing buttons (edit mode) */
+    #edit-toolbar {
+      position: fixed; left: 50%; bottom: max(env(safe-area-inset-bottom), 16px);
+      transform: translateX(-50%); z-index: 30;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      max-width: calc(100vw - 20px);
+      padding: 9px 11px; border-radius: 16px;
+      background: var(--surface); border: 1px solid var(--btn-border);
+      box-shadow: 0 6px 22px rgba(0,0,0,0.35);
+    }
+    #edit-toolbar .tb-row { display: flex; justify-content: center; gap: 8px; }
+    #edit-toolbar .big-btn {
+      min-width: 50px; height: 52px; padding: 0 13px; cursor: pointer;
+      font-size: 18px; font-weight: 700; border-radius: 12px;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+      transition: background .1s, transform .1s, color .1s;
+    }
+    #edit-toolbar .big-btn:active { background: var(--accent); color: var(--accent-text); }
+    /* tap feedback flash so it's obvious the button fired */
+    #edit-toolbar .big-btn.flash { background: var(--success); color: #fff; border-color: var(--success); transform: scale(0.93); }
+    /* split/delete are infrequent -> smaller */
+    #edit-toolbar .big-btn.small { min-width: 42px; height: 40px; padding: 0 10px; font-size: 14px; font-weight: 500; }
+    #edit-toolbar #tb-clock { color: var(--accent); border-color: var(--accent); }
+    #edit-toolbar #tb-del { color: var(--danger); border-color: var(--danger); }
+    #edit-toolbar #save-exit-btn { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+    #edit-toolbar .big-btn:disabled { opacity: 0.4; }
+
+    .offline-badge { display: inline-block; background: var(--badge-bg); color: var(--badge-text);
+      padding: 2px 8px; border-radius: 12px; font-size: 12px; vertical-align: middle; }
+
+    /* Dark/light toggle — fixed top right, doesn't interact with layout. */
+    #theme-toggle {
+      width: 36px; height: 36px; border-radius: 50%;
+      border: 1px solid var(--btn-border); background: var(--btn-bg); color: var(--text);
+      font-size: 16px; line-height: 1; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+    #theme-toggle:hover { opacity: 0.85; }
+    .corner-btn{width:36px;height:36px;border-radius:50%;border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--text);font-size:15px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,0.15);font-weight:600;}
+    /* ⚙ settings dropdown (anchored top-right; holds model / font / theme) */
+    #settings-menu{position:fixed;top:56px;right:12px;z-index:2000;background:var(--panel,#fff);color:var(--text);
+      border:1px solid var(--btn-border);border-radius:12px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.28);
+      display:flex;flex-direction:column;gap:12px;min-width:220px;max-width:min(86vw,340px);}
+    #settings-menu .set-grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+    #settings-menu .set-lbl{font-size:12px;color:var(--muted);font-weight:700;flex:0 0 34px;}
+    #settings-menu .chips{display:flex;flex-wrap:wrap;gap:6px;flex:1 1 auto;min-width:0;}
+    #settings-menu .chips button{padding:5px 11px;border-radius:999px;border:1px solid var(--btn-border);
+      background:var(--btn-bg);color:var(--text);font-size:12.5px;cursor:pointer;font-weight:600;}
+    #settings-menu .chips button.on{background:var(--accent);color:var(--accent-text);border-color:var(--accent);}
+
+    /* Toast for "copied" feedback. */
+    #toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+      background: rgba(0,0,0,0.78); color: #fff;
+      padding: 8px 16px; border-radius: 20px; font-size: 14px;
+      pointer-events: none; opacity: 0; transition: opacity 0.18s ease;
+      z-index: 20;
+    }
+    #toast.show { opacity: 1; }
+  
+
+  #type-toggle { min-width:74px; }
+  /* audio collections: use real <audio> bar (a video element renders blank when idle) */
+  #apl { width:100%; }
+  body:not(.video-mode) #audio { display:none; }
+  body:not(.video-mode) #apl  { display:block; }
+  body.video-mode #apl { display:none; }
+  /* video mode, collapsed: small tappable thumbnail (tap to re-enlarge) */
+  body.video-mode:not(.playing) #audio { width:100%; height:auto; max-height:22vh;
+    background:#000; object-fit:contain; cursor:pointer; }
+  /* video PLAYING: video on top + lyrics below fill exactly one screen; only lyrics scroll */
+  /* ===== video playing: full-screen overlay, video on top + lyrics below ===== */
+  body.video-mode.playing { overflow:hidden; }
+  #stage { display:block; }
+  body.video-mode.playing #stage {
+    position:fixed; inset:0; z-index:50; background:var(--bg);
+    display:flex; flex-direction:column; padding:0; margin:0;
+  }
+  body.video-mode.playing #play-row {
+    flex:0 0 auto; position:static; display:flex; flex-wrap:wrap;
+    align-items:center; gap:6px; background:#000; padding:2px 4px;
+  }
+  body.video-mode.playing #play-row #audio {
+    flex:0 0 100%; width:100%; height:auto; max-height:50dvh;
+    background:#000; object-fit:contain; margin:0;
+  }
+  body.video-mode.playing #rpane { flex:1 1 auto; min-height:0; overflow-y:auto; padding:4px 10px; }
+  #fs-btn { display:none; }
+  body.video-mode.playing #fs-btn { display:inline-flex; }
+  /* fake landscape fullscreen — rotate video to landscape when device is portrait
+     (works on iOS/Android/desktop; screen.orientation.lock is unreliable) */
+  #fs-exit { display:none; }
+  body.videofs { overflow:hidden; }
+  body.videofs #audio {
+    position:fixed !important; top:0 !important; left:0 !important;
+    width:100vw !important; height:100dvh !important; max-height:none !important;
+    margin:0 !important; transform:none !important;
+    object-fit:contain; background:#000; z-index:9999;
+  }
+  @media (orientation:portrait){
+    body.videofs #audio {
+      top:50% !important; left:50% !important;
+      width:100vh !important; height:100vw !important;
+      transform:translate(-50%,-50%) rotate(90deg) !important;
+    }
+  }
+  body.videofs #fs-exit {
+    display:flex; align-items:center; position:fixed; top:10px; right:12px; z-index:10000;
+    background:rgba(0,0,0,.55); color:#fff; border:1px solid rgba(255,255,255,.45);
+    border-radius:8px; padding:8px 12px; font-size:15px;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <button id="type-toggle" class="corner-btn" type="button" title="音频/视频">🎧 音频</button>
+  <button id="mode-toggle" class="corner-btn" type="button" title="本地/远程">📁</button>
+  <button id="gear" class="corner-btn" type="button" title="设置" aria-label="设置">⚙</button>
+</div>
+<div id="settings-menu" style="display:none">
+  <div class="set-grp"><span class="set-lbl">模型</span><span id="model-chips" class="chips"></span></div>
+  <div class="set-grp"><span class="set-lbl">字号</span>
+    <button id="font-smaller" class="corner-btn" type="button" title="字体缩小">A-</button>
+    <button id="font-bigger" class="corner-btn" type="button" title="字体放大">A+</button>
+  </div>
+  <div class="set-grp"><span class="set-lbl">显示</span>
+    <button id="theme-toggle" class="corner-btn" type="button" aria-label="切换深色/浅色">🌙</button>
+  </div>
+</div>
+<div class="suite-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0;">
+  <label for="suite-select">合集：</label>
+  <select id="suite-select" style="padding:6px 10px;border-radius:8px;font-size:15px"></select>
+  <label class="btn" for="file-input" id="choose-label">📁 Choose</label>
+  <input type="file" id="file-input" accept="audio/*,video/mp4,.mp3,.mp4" multiple>
+</div>
+<div class="picker"><div class="picker-info" id="picker-info"></div></div>
+
+<div id="cache-info" style="font-size:13px;color:var(--muted);margin:6px 0"></div>
+<div id="trackList"></div>
+<button id="fs-exit" type="button">✕ 退出全屏</button>
+
+<div id="stage">
+<div id="play-row">
+  <video id="audio" controls playsinline preload="metadata"></video>
+  <audio id="apl" controls preload="metadata"></audio>
+  <button id="fs-btn" class="tool-btn" type="button" title="全屏(横屏)" aria-label="全屏">⛶ 全屏</button>
+  <button id="edit-toggle" class="tool-btn" type="button" disabled title="编辑歌词" aria-label="编辑歌词">✏️</button>
+  <button id="go-top" class="tool-btn" type="button" title="返回列表" aria-label="返回列表">↑</button>
+  <button id="go-current" class="tool-btn" type="button" title="跳到当前播放句并恢复滚动" aria-label="跳到当前播放句">📍</button>
+  <button id="copy-all" class="tool-btn" type="button" title="复制全部歌词" aria-label="复制全部歌词">📋</button>
+</div>
+<div id="rpane">
+<div id="lyrics-bar">
+  <button id="add-line" class="tool-btn" type="button" style="display:none">＋ 末尾加句</button>
+</div>
+<div id="warn-banner" class="warn-banner" style="display:none"></div>
+<div id="lyrics"></div>
+</div>
+</div>
+
+<!-- edit mode: fixed bottom-center big buttons, act on the selected row -->
+<div id="edit-toolbar" style="display:none">
+  <div class="tb-row">
+    <button id="tb-back5" class="big-btn" type="button">⏪ 后退5s</button>
+    <button id="tb-fwd5"  class="big-btn" type="button">前进5s ⏩</button>
+  </div>
+  <div class="tb-row">
+    <button id="save-btn"      class="big-btn small" type="button">💾 保存</button>
+    <button id="save-exit-btn" class="big-btn small" type="button">✅ 存并退出</button>
+    <button id="cancel-btn"    class="big-btn small" type="button">取消</button>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script id="suites-data" type="application/json">{{ suites | tojson | safe }}</script>
+<script>
+/* Theme: persisted in localStorage; defaults to OS preference. Pure black bg
+ * in dark mode (CSS `--bg: #000` on body.dark). */
+(function () {
+  const btn = document.getElementById('theme-toggle');
+  function apply(t) {
+    document.body.classList.toggle('dark', t === 'dark');
+    btn.textContent = t === 'dark' ? '☀️' : '🌙';
+    btn.setAttribute('aria-pressed', t === 'dark');
+  }
+  const saved = localStorage.getItem('theme');
+  const initial = saved
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  apply(initial);
+  btn.addEventListener('click', () => {
+    const next = document.body.classList.contains('dark') ? 'light' : 'dark';
+    localStorage.setItem('theme', next);
+    apply(next);
+  });
+})();
+
+const SUITES = JSON.parse(document.getElementById('suites-data').textContent);
+let TRACKS = [];
+let ftype = localStorage.getItem('ftype') || 'audio';
+let currentSuite = (SUITES.filter(s=>s.type===ftype)[0]||SUITES[0]||{}).id||null;
+const vidEl = document.getElementById('audio');   // video element (video collections)
+const audEl = document.getElementById('apl');      // audio element (audio collections)
+let audio = vidEl;                                 // active media element
+function useMedia(isVideo){
+  const want = isVideo ? vidEl : audEl;
+  if (audio !== want) { try{ audio.pause(); }catch(_){} }
+  audio = want;
+}
+const lyricsDiv = document.getElementById('lyrics');
+const trackListDiv = document.getElementById('trackList');
+const fileInput = document.getElementById('file-input');
+const pickerInfo = document.getElementById('picker-info');
+const editToggle = document.getElementById('edit-toggle');
+const addLineBtn = document.getElementById('add-line');
+const saveBtn = document.getElementById('save-btn');
+const saveExitBtn = document.getElementById('save-exit-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const warnBanner = document.getElementById('warn-banner');
+const editToolbar = document.getElementById('edit-toolbar');
+
+const localFiles = new Map();
+let currentBlobUrl = null;
+let currentBtn = null;
+let lyrics = [];               // [{time:Number|null, text:String}]
+let currentLineIndex = -1;
+let currentTrack = null;       // the track object currently loaded
+let editMode = false;
+let _wasPlayingBeforeEdit = false;   // resume playback after edit ends (if it was playing)
+let mode = localStorage.getItem('audioMode') || 'local';   // 本地/远程音频
+let selectedIndex = -1;        // edit mode: row the bottom toolbar acts on
+let previewUntil = null;       // when set, audio auto-pauses at this time (line preview)
+let suppressAutoScroll = false; // user is manually scrolling lyrics -> pause auto-follow
+let _scrollResumeTimer = null;
+
+function trackTitle(t){ const m=(t.lyrics||'').match(/（#([^）]+)）/); return m?m[1].trim():''; }
+function dispName(t){ const ti=trackTitle(t); return ti ? (t.name+' - '+ti) : t.name; }
+function stripMark(s){ return (s||'').replace(/（#[^）]*）\s*/,''); }
+function renderTrackList() {
+  trackListDiv.innerHTML = '';
+  const shown = (mode==='remote') ? TRACKS.slice() : TRACKS.filter(t => localFiles.has(t.name));
+  if (!shown.length) {
+    trackListDiv.innerHTML = (mode==='remote')
+      ? '<div style="color:var(--muted);padding:10px 4px">该合集暂无曲目。</div>'
+      : '<div style="color:var(--muted);padding:10px 4px">点上方“📁 Choose”，选中的曲目才会显示（只列你选的）；或右上角切到远程模式直接播。</div>';
+    return;
+  }
+  // 按 brk 分组
+  const groups=[]; let cur=[];
+  shown.forEach(t => { cur.push(t); if (t.brk) { groups.push(cur); cur=[]; } });
+  if (cur.length) groups.push(cur);
+  const numbered = groups.length > 1;   // 多行才加行号
+  groups.forEach((g, gi) => {
+    const row = document.createElement('div'); row.className='track-row';
+    if (numbered) { const n=document.createElement('span'); n.className='row-num'; n.textContent=(gi+1); row.appendChild(n); }
+    const items = document.createElement('div'); items.className='row-items';
+    g.forEach(track => {
+      const btn = document.createElement('button');
+      btn.textContent = dispName(track);
+      btn.className = 'has-local';
+      btn.onclick = () => play(track, btn);
+      items.appendChild(btn);
+    });
+    row.appendChild(items);
+    trackListDiv.appendChild(row);
+  });
+}
+
+fileInput.addEventListener('change', e => {
+  const files = Array.from(e.target.files);
+  for (const f of files) {
+    const base = f.name.replace(/\.[^.]+$/, '');
+    localFiles.set(base, f);
+  }
+  updateStatus();
+  renderTrackList();
+});
+
+function play(track, btn) {
+  if (mode !== 'remote' && !localFiles.has(track.name)) {
+    alert('未找到本地 ' + track.name + '.mp3，请先选择文件（或切到远程模式）。');
+    return;
+  }
+  if (editMode) exitEdit(true);
+  // 同一集: 已在播放, 只需重新放大回大界面, 不重置进度
+  if (currentTrack && currentTrack.name === track.name && audio.src) {
+    if (currentBtn) currentBtn.classList.remove('playing');
+    btn.classList.add('playing'); currentBtn = btn;
+    document.body.classList.add('playing');
+    audio.play().catch(()=>{});
+    return;
+  }
+  if (currentBtn) currentBtn.classList.remove('playing');
+  btn.classList.add('playing');
+  currentBtn = btn;
+
+  if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+  if (mode === 'remote') {
+    audio.src = '/media/' + encodeURIComponent(currentSuite) + '/' + encodeURIComponent(track.name);
+  } else {
+    currentBlobUrl = URL.createObjectURL(localFiles.get(track.name));
+    audio.src = currentBlobUrl;
+  }
+  audio.play();
+  document.body.classList.add('playing');
+  currentLineIndex = -1;
+  previewUntil = null;
+  currentTrack = track;
+  lyrics = parseLyrics(track.lyrics || '');
+  editToggle.disabled = false;
+  displayLyrics();
+}
+
+function parseLyrics(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    // Accept optional 1–2 decimal places on the seconds field.
+    const m = line.match(/\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,2}))?\]\s*(.*)/);
+    if (m) {
+      const frac = m[4] ? +('0.' + m[4]) : 0;
+      const t = +m[1]*3600 + +m[2]*60 + +m[3] + frac;
+      out.push({ time: t, orig: t, text: m[5] });   // orig = value as loaded (for reset)
+    }
+  }
+  return out;
+}
+
+/* seconds (Number) -> "HH:MM:SS" or "HH:MM:SS.xx" (decimals dropped when whole). */
+function fmtTime(sec) {
+  if (sec == null || isNaN(sec)) return '';
+  sec = Math.max(0, sec);
+  const whole = Math.floor(sec);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  const cs = Math.round((sec - whole) * 100);   // centiseconds
+  let base = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  // Rounding can push centiseconds to 100 -> carry into the seconds.
+  if (cs === 100) return fmtTime(whole + 1);
+  return cs > 0 ? `${base}.${String(cs).padStart(2,'0')}` : base;
+}
+
+/* "HH:MM:SS" / "HH:MM:SS.xx" -> seconds (Number) or null if malformed. */
+function parseTime(str) {
+  const m = String(str).trim().match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,2}))?$/);
+  if (!m) return null;
+  const frac = m[4] ? +('0.' + m[4]) : 0;
+  return +m[1]*3600 + +m[2]*60 + +m[3] + frac;
+}
+
+/* ---------------- view mode ---------------- */
+function displayLyrics() {
+  lyricsDiv.classList.remove('editing');
+  lyricsDiv.innerHTML = '';
+  if (!lyrics.length) {
+    lyricsDiv.innerHTML = '<i>无歌词</i>';
+    return;
+  }
+  lyrics.forEach((ln, i) => {
+    const d = document.createElement('div');
+    d.textContent = stripMark(ln.text);
+    d.className = 'line';
+    d.dataset.index = i;
+    d.onclick = () => {
+      if (ln.time != null) { audio.currentTime = ln.time; audio.play(); }
+    };
+    lyricsDiv.appendChild(d);
+  });
+}
+
+async function copyTextSafe(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    // Fallback for non-secure contexts / older browsers.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+    return ok;
+  }
+}
+
+let _toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 1300);
+}
+
+/* ---------------- edit mode ---------------- */
+
+/* Compute per-line problems. Returns {missing:[idx], inversion:[idx], badts:[idx]}.
+ *  - missing:   line has no time set (e.g. a freshly split line)
+ *  - badts:     the timestamp text box is not a valid HH:MM:SS[.xx]
+ *  - inversion: this line's time is earlier than the previous timed line */
+function computeWarnings() {
+  const missing = [], inversion = [];
+  let prev = null;
+  lyrics.forEach((ln, i) => {
+    if (ln.time == null) { missing.push(i); return; }
+    if (prev != null && ln.time < prev) inversion.push(i);
+    prev = ln.time;
+  });
+  return { missing, inversion };
+}
+
+function refreshWarnings() {
+  const w = computeWarnings();
+  const missing = new Set(w.missing), inversion = new Set(w.inversion);
+  let autoCount = 0;
+  lyricsDiv.querySelectorAll('.erow').forEach(row => {
+    const i = +row.dataset.index;
+    const ln = lyrics[i];
+    const isMiss = missing.has(i), isInv = inversion.has(i);
+    const isAuto = !!(ln && ln.auto);
+    if (isAuto) autoCount++;
+    row.classList.toggle('warn', isMiss || isAuto);
+    row.classList.toggle('err', isInv);
+    // per-row badge: 逆序 > 未设 > 估算
+    const flag = row.querySelector('.rowflag');
+    if (flag) {
+      if (isInv)       { flag.textContent = '⚠逆序'; flag.className = 'rowflag inv'; }
+      else if (isMiss) { flag.textContent = '⏱未设'; flag.className = 'rowflag miss'; }
+      else if (isAuto) { flag.textContent = '≈估算'; flag.className = 'rowflag miss'; }
+      else             { flag.textContent = '';       flag.className = 'rowflag'; }
+    }
+  });
+  const n = w.missing.length + w.inversion.length;
+  if (n === 0) {
+    warnBanner.className = 'warn-banner ok';
+    warnBanner.textContent = autoCount
+      ? `✓ ${lyrics.length} 句，可保存（${autoCount} 句为估算，建议确认）`
+      : `✓ ${lyrics.length} 句，无告警，可保存`;
+    saveBtn.disabled = false;
+    saveExitBtn.disabled = false;
+  } else {
+    warnBanner.className = 'warn-banner';
+    const bits = [];
+    if (w.missing.length)   bits.push(`${w.missing.length} 句未设时间`);
+    if (w.inversion.length) bits.push(`${w.inversion.length} 句时间逆序`);
+    warnBanner.textContent = `⚠ ${bits.join('，')}（高亮的行）—— 修正后才能保存`;
+    saveBtn.disabled = true;
+    saveExitBtn.disabled = true;
+  }
+  return n;
+}
+
+function renderEditor() {
+  lyricsDiv.classList.add('editing');
+  lyricsDiv.innerHTML = '';
+  lyrics.forEach((ln, i) => {
+    const row = document.createElement('div');
+    row.className = 'erow';
+    row.dataset.index = i;
+
+    // editable text — auto-grows & wraps. Enter or ✂ splits at every "/".
+    const txtInput = document.createElement('textarea');
+    txtInput.className = 'txt-input';
+    txtInput.rows = 1;
+    txtInput.value = ln.text;
+    txtInput.oninput = () => { ln.text = txtInput.value; autogrow(txtInput); };
+    txtInput.addEventListener('focus', () => selectRow(i));
+    txtInput.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        splitByMarker(i);
+      } else if (e.key === 'Backspace'
+                 && txtInput.selectionStart === 0 && txtInput.selectionEnd === 0
+                 && i > 0) {
+        e.preventDefault();
+        mergeUp(i);
+      }
+    };
+
+    // 🕐 per-line set-time: stamp this line at current playback (−1.5s), and
+    // select it so the bottom 赶/退 also act on it
+    const setBtn = document.createElement('button');
+    setBtn.className = 'iconbtn clockbtn';
+    setBtn.type = 'button';
+    setBtn.textContent = '🕐';
+    setBtn.title = '把这句设为当前播放进度（早1.5s）';
+    setBtn.onclick = () => {
+      ln.time = Math.max(0, Math.round((audio.currentTime - 1.5) * 100) / 100);
+      ln.auto = false;
+      selectRow(i);
+      refreshWarnings();
+      showToast('第' + (i + 1) + '句 设为 ' + fmtTime(ln.time) + '（早1.5s）');
+    };
+
+    // ▶ preview from this line, plays through to the end
+    const playBtn = document.createElement('button');
+    playBtn.className = 'iconbtn playbtn';
+    playBtn.type = 'button';
+    playBtn.textContent = '▶';
+    playBtn.title = '从这句回听（放到结尾）';
+    playBtn.onclick = () => previewLine(i);
+
+    // 赶 +0.5s / 退 −0.5s (per-line)
+    const earlierBtn = document.createElement('button');
+    earlierBtn.className = 'iconbtn';
+    earlierBtn.type = 'button';
+    earlierBtn.textContent = '赶';
+    earlierBtn.title = '这句 +0.5 秒';
+    earlierBtn.onclick = () => { if (nudge(ln, 0.5))  { selectRow(i); showToast('第' + (i + 1) + '句 赶 → ' + fmtTime(ln.time)); } };
+
+    const laterBtn = document.createElement('button');
+    laterBtn.className = 'iconbtn';
+    laterBtn.type = 'button';
+    laterBtn.textContent = '退';
+    laterBtn.title = '这句 −0.5 秒';
+    laterBtn.onclick = () => { if (nudge(ln, -0.5)) { selectRow(i); showToast('第' + (i + 1) + '句 退 → ' + fmtTime(ln.time)); } };
+
+    // ✂ split this line at every "/" marker
+    const splitBtn = document.createElement('button');
+    splitBtn.className = 'iconbtn';
+    splitBtn.type = 'button';
+    splitBtn.textContent = '✂';
+    splitBtn.title = '按 / 把这句切成多句';
+    splitBtn.onclick = () => splitByMarker(i);
+
+    // ✕ delete this line (with confirm)
+    const delBtn = document.createElement('button');
+    delBtn.className = 'iconbtn delbtn';
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = '删除这句';
+    delBtn.onclick = () => {
+      const preview = (ln.text || '').trim().slice(0, 24) || '(空行)';
+      if (!confirm('删除这句？\n「' + preview + '」')) return;
+      lyrics.splice(i, 1);
+      if (selectedIndex === i) selectedIndex = -1;
+      else if (selectedIndex > i) selectedIndex--;
+      renderEditor();
+    };
+
+    // per-row warning badge: 未设时间 / 逆序 / 估算; refreshWarnings fills it
+    const flag = document.createElement('span');
+    flag.className = 'rowflag';
+
+    // tapping the row (not a button) selects it for the bottom toolbar
+    row.addEventListener('click', (e) => {
+      if (!e.target.closest('.iconbtn')) selectRow(i);
+    });
+
+    // text on its own line; per-line buttons on a separate row below it
+    const controls = document.createElement('div');
+    controls.className = 'controls';
+    controls.append(setBtn, playBtn, earlierBtn, laterBtn, splitBtn, delBtn, flag);
+    row.append(txtInput, controls);
+    lyricsDiv.appendChild(row);
+  });
+  // textareas need to be in the DOM to measure their content height
+  lyricsDiv.querySelectorAll('.txt-input').forEach(autogrow);
+  if (selectedIndex >= 0 && selectedIndex < lyrics.length) {
+    lyricsDiv.querySelectorAll('.erow')[selectedIndex]?.classList.add('selected');
+  }
+  refreshWarnings();
+}
+
+/* Mark line `i` as the selected row that the bottom toolbar (🕐/赶/退) acts on. */
+function selectRow(i) {
+  selectedIndex = i;
+  lyricsDiv.querySelectorAll('.erow').forEach((r, k) => r.classList.toggle('selected', k === i));
+}
+
+/* Shift a line's time by delta seconds (±0.5 buttons). Clamped at 0; rounded
+ * to 0.01s to avoid float drift. Re-checks warnings (may fix/cause inversion). */
+function nudge(ln, delta) {
+  if (ln.time == null) { showToast('这句还没设时间'); return false; }
+  ln.time = Math.max(0, Math.round((ln.time + delta) * 100) / 100);
+  ln.auto = false;   // user adjusted it -> confirmed, no longer an estimate
+  refreshWarnings();
+  return true;
+}
+
+/* brief green flash so a tap visibly registers */
+function flashBtn(btn) {
+  if (!btn) return;
+  btn.classList.add('flash');
+  setTimeout(() => btn.classList.remove('flash'), 170);
+}
+
+/* Resize a textarea to hug its content (min one line). */
+function autogrow(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
+}
+
+/* Split line `i` at every "/" marker. Part 0 keeps the real start time; the
+ * rest get DEFAULT times by splitting this line's span proportionally to each
+ * part's char count, marked auto=true ("估算") until the user confirms. */
+function splitByMarker(i) {
+  const base = lyrics[i];
+  const parts = base.text.split('/').map(s => s.trim()).filter(s => s !== '');
+  if (parts.length <= 1) { showToast('先在句中打 / 标记切分点'); return; }
+
+  const t0 = base.time;
+  let tEnd = null;
+  for (let k = i + 1; k < lyrics.length; k++) {
+    if (lyrics[k].time != null) { tEnd = lyrics[k].time; break; }
+  }
+  let starts = null;
+  if (t0 != null && tEnd != null && tEnd > t0) {
+    const lens = parts.map(p => Math.max(1, p.length));
+    const total = lens.reduce((a, b) => a + b, 0);
+    starts = []; let acc = 0;
+    for (let k = 0; k < parts.length; k++) {
+      starts.push(Math.round((t0 + (tEnd - t0) * acc / total) * 100) / 100);
+      acc += lens[k];
+    }
+  }
+
+  const newLines = parts.map((text, k) => {
+    if (k === 0) return { time: t0, orig: base.orig, text, auto: false };   // keeps the real start
+    if (starts)  return { time: starts[k], orig: null, text, auto: true };   // estimated -> 估算
+    return { time: null, orig: null, text, auto: false };                    // no span -> 未设
+  });
+  lyrics.splice(i, 1, ...newLines);
+
+  selectedIndex = i + 1;        // select the first new segment, ready to confirm
+  renderEditor();
+  const inp = lyricsDiv.querySelectorAll('.erow')[i + 1]?.querySelector('.txt-input');
+  if (inp) { inp.focus(); try { inp.setSelectionRange(0, 0); } catch (_) {} }
+}
+
+/* Merge line `i` into line `i-1` (Backspace at the start of a line). The
+ * merged line keeps the PREVIOUS line's time; line i's time is dropped. */
+function mergeUp(i) {
+  if (i <= 0) return;
+  const prev = lyrics[i - 1];
+  const caret = prev.text.length;          // caret lands at the join point
+  prev.text = prev.text + lyrics[i].text;
+  lyrics.splice(i, 1);
+  selectedIndex = i - 1;
+  renderEditor();
+  const inp = lyricsDiv.querySelectorAll('.erow')[i - 1]?.querySelector('.txt-input');
+  if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (_) {} }
+}
+
+/* Play from line `i` and keep going to the end — lets you check the timing
+ * of this line and everything after it. */
+function previewLine(i) {
+  const ln = lyrics[i];
+  if (ln.time == null) { showToast('这句还没设时间'); return; }
+  previewUntil = null;        // play from here through to the end (no auto-stop)
+  audio.currentTime = ln.time;
+  audio.play();
+}
+
+function enterEdit() {
+  if (!currentTrack) { alert('请先选择并播放一个曲目，再进入编辑。'); return; }
+  editMode = true;
+  _wasPlayingBeforeEdit = !audio.paused;   // pause while editing
+  audio.pause();
+  editToggle.style.display = 'none';
+  document.getElementById('go-top').style.display = 'none';
+  document.getElementById('copy-all').style.display = 'none';
+  document.getElementById('go-current').style.display = 'none';
+  addLineBtn.style.display = '';
+  saveBtn.style.display = '';
+  saveExitBtn.style.display = '';
+  cancelBtn.style.display = '';
+  warnBanner.style.display = '';
+  editToolbar.style.display = '';
+  // start with the currently-playing line selected & shown
+  let idx = -1;
+  for (let i = 0; i < lyrics.length; i++) {
+    if (lyrics[i].time != null && audio.currentTime >= lyrics[i].time) idx = i;
+    else if (lyrics[i].time != null) break;
+  }
+  selectedIndex = idx;
+  renderEditor();
+  if (idx >= 0) {
+    const rows = lyricsDiv.querySelectorAll('.erow');
+    rows[idx]?.classList.add('highlight');
+    rows[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    currentLineIndex = idx;
+  }
+}
+
+function exitEdit(silent, resume) {
+  editMode = false;
+  editToggle.style.display = '';
+  document.getElementById('go-top').style.display = '';
+  document.getElementById('copy-all').style.display = '';
+  document.getElementById('go-current').style.display = '';
+  addLineBtn.style.display = 'none';
+  saveBtn.style.display = 'none';
+  saveExitBtn.style.display = 'none';
+  cancelBtn.style.display = 'none';
+  warnBanner.style.display = 'none';
+  editToolbar.style.display = 'none';
+  selectedIndex = -1;
+  // re-parse from the (unchanged or just-saved) track source
+  lyrics = parseLyrics(currentTrack ? (currentTrack.lyrics || '') : '');
+  currentLineIndex = -1;
+  displayLyrics();
+  if (!silent) showToast('已退出编辑');
+  // restore the pre-edit playback state (only when the user actually finished editing —
+  // not during a track/suite switch teardown). previewLine() plays on purpose while
+  // editing, so "wasn't playing before" has to actively stop that preview: skipping the
+  // play() call isn't enough, or the preview leaks out into view mode still sounding.
+  if (resume) {
+    if (_wasPlayingBeforeEdit) audio.play().catch(() => {});
+    else audio.pause();
+  }
+  _wasPlayingBeforeEdit = false;
+}
+
+/* Serialize the in-memory lyrics back to the .txt format. */
+function serializeLyrics() {
+  return lyrics
+    .filter(ln => (ln.text || '').trim() !== '' || ln.time != null)
+    .map(ln => `[${fmtTime(ln.time)}] ${(ln.text || '').replace(/\s*\n\s*/g, ' ').trim()}`.trimEnd())
+    .join('\n') + '\n';
+}
+
+editToggle.onclick = enterEdit;
+cancelBtn.onclick = () => exitEdit(false, true);
+
+// playback seek (no row needed) — handy while timing
+document.getElementById('tb-back5').onclick = (e) => {
+  audio.currentTime = Math.max(0, audio.currentTime - 5);
+  flashBtn(e.currentTarget); showToast('⏪ ' + fmtTime(audio.currentTime));
+};
+document.getElementById('tb-fwd5').onclick = (e) => {
+  audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5);
+  flashBtn(e.currentTarget); showToast('⏩ ' + fmtTime(audio.currentTime));
+};
+
+addLineBtn.onclick = () => {
+  lyrics.push({ time: null, orig: null, text: '' });
+  renderEditor();
+  const rows = lyricsDiv.querySelectorAll('.erow');
+  rows[rows.length - 1]?.querySelector('.txt-input')?.focus();
+};
+
+// Save to the server. Returns true on success. Does NOT exit by itself.
+async function doSave() {
+  if (refreshWarnings() > 0) { showToast('仍有告警，无法保存'); return false; }
+  if (!currentTrack) return false;
+  const body = JSON.stringify({ suite: currentSuite, name: currentTrack.name, lyrics: serializeLyrics() });
+  saveBtn.disabled = true; saveExitBtn.disabled = true;
+  saveBtn.textContent = '保存中…';
+  try {
+    const r = await fetch('/save_lyrics', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      currentTrack.lyrics = serializeLyrics();   // keep in-memory copy fresh
+      showToast('已保存 ✓ 备份 ' + (j.backup || ''));
+      return true;
+    }
+    alert('保存失败：' + (j.error || ('HTTP ' + r.status)));
+    return false;
+  } catch (e) {
+    alert('保存请求出错：' + e);
+    return false;
+  } finally {
+    saveBtn.textContent = '💾 保存';
+    saveBtn.disabled = false; saveExitBtn.disabled = false;
+  }
+}
+
+saveBtn.onclick = () => doSave();                                  // save, stay in edit mode
+saveExitBtn.onclick = async () => { if (await doSave()) exitEdit(true, true); };  // save then exit
+
+/* current-line highlight — works in both view and edit mode. */
+[vidEl, audEl].forEach(_el => _el.addEventListener('timeupdate', () => {
+  const t = audio.currentTime;
+  // auto-stop a line preview when it reaches the next line
+  if (previewUntil != null && t >= previewUntil) {
+    audio.pause();
+    previewUntil = null;
+  }
+  let idx = -1;
+  for (let i = 0; i < lyrics.length; i++) {
+    if (lyrics[i].time != null && t >= lyrics[i].time) idx = i; else if (lyrics[i].time != null) break;
+  }
+  if (idx !== currentLineIndex) {
+    const sel = editMode ? '.erow' : '.line';
+    const all = lyricsDiv.querySelectorAll(sel);
+    if (currentLineIndex >= 0) all[currentLineIndex]?.classList.remove('highlight');
+    if (idx >= 0) {
+      all[idx]?.classList.add('highlight');
+      // don't yank the view while editing, while the user is scrolling lyrics,
+      // while the ✨ interpret chat drawer is open, or while the user has text
+      // selected in the lyrics (auto-scroll would break their selection)
+      const _drw = document.getElementById('nrw-drawer');
+      const interpretOpen = _drw && _drw.classList.contains('open');
+      if (!editMode && !suppressAutoScroll && !interpretOpen && !hasLyricSelection())
+        all[idx]?.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+    currentLineIndex = idx;
+  }
+}));
+
+// While the user is manually scrolling the lyrics, pause auto-follow; resume
+// ~2s after they stop. wheel/touchmove are user-initiated (programmatic
+// scrollIntoView does NOT fire them), so this won't suppress itself.
+function armResume() {   // (re)start the "no scrolling for a while -> resume" countdown
+  clearTimeout(_scrollResumeTimer);
+  _scrollResumeTimer = setTimeout(() => { suppressAutoScroll = false; }, 2000);
+}
+function noteUserScroll() { suppressAutoScroll = true; armResume(); }
+// wheel/touchmove = scrolling; pointerdown = a tap or the start of a text-selection
+// drag (so the view doesn't jump the instant you touch a line to select it).
+['wheel', 'touchmove', 'pointerdown'].forEach(ev =>
+  lyricsDiv.addEventListener(ev, noteUserScroll, { passive: true }));
+// touchmove/wheel stop firing once the finger lifts, but iOS momentum (and scrollbar/
+// keyboard) scrolling keeps firing 'scroll'. While already paused, keep resetting the
+// countdown on every scroll tick so it only resumes after scrolling TRULY stops.
+// Safe from self-triggering: during a pause auto-follow is off, so no scrollIntoView of
+// ours fires here; and we never START a pause from 'scroll' (guarded on suppress).
+window.addEventListener('scroll', () => { if (suppressAutoScroll) armResume(); }, { passive: true });
+// true while the user has a non-empty text selection inside the lyrics
+function hasLyricSelection() {
+  const s = window.getSelection();
+  if (!s || s.isCollapsed || !s.toString().trim()) return false;
+  const a = s.anchorNode, el = a ? (a.nodeType === 3 ? a.parentNode : a) : null;
+  return !!(el && lyricsDiv.contains(el));
+}
+
+renderTrackList();
+
+/* ---- 多合集: 填充下拉 + 切换加载 ---- */
+const suiteSelect=document.getElementById('suite-select');
+function suiteType(id){const x=SUITES.find(s=>s.id===id);return x?x.type:'audio';}
+function populateSuites(){
+  suiteSelect.innerHTML='';
+  const list=SUITES.filter(s=>s.type===ftype);
+  list.forEach(s=>{const o=document.createElement('option');o.value=s.id;o.textContent=s.label;suiteSelect.appendChild(o);});
+  return list.length?list[0].id:null;
+}
+function applyFilter(){
+  const tt=document.getElementById('type-toggle');
+  if(tt) tt.textContent = ftype==='video' ? '🎬 视频' : '🎧 音频';
+  const first=populateSuites();
+  if(first){ suiteSelect.value=first; loadSuite(first); } else { TRACKS=[]; renderTrackList(); }
+}
+document.getElementById('type-toggle').onclick=()=>{
+  ftype = (ftype==='video') ? 'audio' : 'video';
+  localStorage.setItem('ftype',ftype); applyFilter();
+};
+suiteSelect.addEventListener('change',()=>loadSuite(suiteSelect.value));
+async function loadSuite(id){
+  if(editMode) exitEdit(true);
+  currentSuite=id;
+  document.body.classList.remove('playing');
+  document.body.classList.toggle('video-mode', suiteType(id)==='video');
+  useMedia(suiteType(id)==='video');
+  pickerInfo && (pickerInfo.innerHTML='…');
+  try{const r=await fetch('/api/suite/'+encodeURIComponent(id));TRACKS=await r.json();}catch(e){TRACKS=[];}
+  renderTrackList();
+  updateStatus();
+}
+/* ---- 本地音频持久化: 选一次长期缓存, 离线可用, 免重选 ---- */
+const cacheInfo=document.getElementById('cache-info');
+let _db=null;
+function idb(){return _db?Promise.resolve(_db):new Promise((res,rej)=>{const r=indexedDB.open('localplayer',1);r.onupgradeneeded=()=>r.result.createObjectStore('audio');r.onsuccess=()=>{_db=r.result;res(_db);};r.onerror=()=>rej(r.error);});}
+async function idbPut(k,b){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('audio','readwrite');t.objectStore('audio').put(b,k);t.oncomplete=res;t.onerror=()=>rej(t.error);});}
+async function idbAll(){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('audio','readonly'),out=[],c=t.objectStore('audio').openCursor();c.onsuccess=e=>{const cur=e.target.result;if(cur){out.push([cur.key,cur.value]);cur.continue();}else res(out);};c.onerror=()=>rej(c.error);});}
+async function idbClear(){const db=await idb();return new Promise(res=>{const t=db.transaction('audio','readwrite');t.objectStore('audio').clear();t.oncomplete=res;});}
+async function updateStatus(){
+  if(!pickerInfo) return;
+  const total = TRACKS.length;
+  if (mode==='remote'){ pickerInfo.innerHTML = total+' episodes'; if(cacheInfo)cacheInfo.innerHTML=''; return; }
+  const matched = TRACKS.filter(t=>localFiles.has(t.name)).length;
+  let cached=0; try{ cached=(await idbAll()).length; }catch(_){}
+  pickerInfo.innerHTML = total+' eps · '+matched+' matched · '+cached+' cached'+(cached?' · <a href="#" id="clr">clear</a>':'');
+  if(cacheInfo) cacheInfo.innerHTML='';
+  const a=document.getElementById('clr');
+  if(a) a.onclick=async ev=>{ ev.preventDefault(); if(confirm('清除缓存?')){ await idbClear(); localFiles.clear(); updateStatus(); renderTrackList(); } };
+}
+async function updateCacheInfo(){ return updateStatus(); }
+fileInput.addEventListener('change',async e=>{for(const f of e.target.files){try{await idbPut(f.name.replace(/\.[^.]+$/,''),f);}catch(_){}}updateCacheInfo();});
+async function restoreCachedAudio(){try{for(const [k,b] of await idbAll())localFiles.set(k,b);}catch(_){}}
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+(async()=>{await restoreCachedAudio();await updateCacheInfo();applyFilter();})();
+
+
+
+
+/* ---- 歌词字号 +/- (记忆) ---- */
+(function(){
+  const L=document.getElementById('lyrics');
+  let fs=parseInt(localStorage.getItem('lyricFont')||'18',10); if(isNaN(fs))fs=18;
+  const apply=()=>{ L.style.fontSize=fs+'px'; };
+  apply();
+  document.getElementById('font-bigger').addEventListener('click',()=>{fs=Math.min(40,fs+2);localStorage.setItem('lyricFont',fs);apply();});
+  document.getElementById('font-smaller').addEventListener('click',()=>{fs=Math.max(12,fs-2);localStorage.setItem('lyricFont',fs);apply();});
+})();
+
+
+/* ↑ 返回列表: 收起大播放界面, 但视频继续播(小窗), 再点该集可放大恢复 */
+document.getElementById('go-top').addEventListener('click',()=>{audio.pause();document.body.classList.remove('playing');window.scrollTo({top:0,behavior:'smooth'});});
+
+/* 📍 跳到当前播放句, 并恢复自动滚动 (清掉选区/暂停标志) */
+document.getElementById('go-current').addEventListener('click',()=>{
+  suppressAutoScroll=false; clearTimeout(_scrollResumeTimer);
+  try{ window.getSelection().removeAllRanges(); }catch(_){}
+  const rows=lyricsDiv.querySelectorAll('.line');
+  const cur=lyricsDiv.querySelector('.line.highlight')||(currentLineIndex>=0?rows[currentLineIndex]:null);
+  if(cur) cur.scrollIntoView({behavior:'smooth',block:'center'});
+});
+
+/* ⚙ 设置下拉：模型选择(来自 /api/models) / 字号 / 显示模式。字号与主题按钮沿用原 id，处理逻辑不变。 */
+(function(){
+  const gear=document.getElementById('gear'), menu=document.getElementById('settings-menu'), chips=document.getElementById('model-chips');
+  let _models=null;
+  async function buildChips(){
+    if(!_models){
+      try{ const d=await (await fetch('/api/models')).json(); _models=d.models||[];
+        if(!localStorage.getItem('nrw_model') && d.default) localStorage.setItem('nrw_model', d.default);
+      }catch(_){ _models=[]; }
+    }
+    const cur=localStorage.getItem('nrw_model')||'';
+    chips.innerHTML='';
+    if(!_models.length){ chips.innerHTML='<span style="font-size:12px;color:var(--muted)">未配置</span>'; return; }
+    _models.forEach(name=>{ const b=document.createElement('button'); b.type='button'; b.textContent=name;
+      if(name===cur) b.classList.add('on');
+      b.onclick=()=>{ localStorage.setItem('nrw_model',name); buildChips(); };
+      chips.appendChild(b); });
+  }
+  gear.addEventListener('click',(e)=>{ e.stopPropagation();
+    const open=(menu.style.display==='none'||!menu.style.display);
+    menu.style.display=open?'flex':'none'; if(open) buildChips(); });
+  document.addEventListener('mousedown',(e)=>{ if(menu.style.display!=='none' && !menu.contains(e.target) && e.target!==gear) menu.style.display='none'; });
+})();
+
+/* 小窗(视频模式已收起)时, 点视频即放大回大播放界面 */
+audio.addEventListener('click',()=>{
+  if(currentTrack &&
+     document.body.classList.contains('video-mode') &&
+     !document.body.classList.contains('playing')){
+    document.body.classList.add('playing');
+    audio.play().catch(()=>{});
+  }
+});
+
+/* ⛶ 全屏: 伪全屏, 竖屏时把视频旋转成横屏铺满整屏 */
+document.getElementById('fs-btn').addEventListener('click',async()=>{
+  document.body.classList.add('videofs');
+  audio.play().catch(()=>{});
+  try{ if(screen.orientation&&screen.orientation.lock) await screen.orientation.lock('landscape'); }catch(_){}
+});
+document.getElementById('fs-exit').addEventListener('click',()=>{
+  document.body.classList.remove('videofs');
+  try{ if(screen.orientation&&screen.orientation.unlock) screen.orientation.unlock(); }catch(_){}
+});
+
+
+document.getElementById('copy-all').addEventListener('click',async()=>{
+  if(!lyrics.length){ showToast('无歌词'); return; }
+  const PROMPT='请帮我分析这段英语对话/文本（来自 audio ASR，可能有转写错误），我在学英语。请逐句审查讲解，但只讲『母语者默认知道、而中国英语课堂不会教』的东西，重点覆盖：1）文化潜规则与背景（母语者默认知道、外国人不熟悉的）；2）习语的非字面用法、不在教科书里的地道口语表达；3）省略、言外之意、特殊语气的句子；4）地道口语结构。非母语高中生都知道的短语、句型、基础词汇和语法一律跳过（除非有特殊含义）。顺便修复明显的 ASR 错误，但别乱改。';
+  const text=lyrics.map(l=>stripMark(l.text)).join('\n')+'\n\n'+PROMPT;
+  const ok=await copyTextSafe(text);
+  showToast(ok?('已复制 '+lyrics.length+' 行'):'复制失败');
+});
+
+
+/* ---- 本地 / 远程 音频模式 ---- */
+function applyMode(){
+  const remote = mode==='remote';
+  const mt=document.getElementById('mode-toggle');
+  mt.textContent = remote ? '☁️' : '📁';
+  mt.title = remote ? '远程（服务器串流，点切本地）' : '本地（选文件夹，点切远程）';
+  const fl=document.querySelector('label[for="file-input"]');
+  if (fl) fl.style.display = remote ? 'none' : '';
+  if (typeof cacheInfo!=='undefined' && cacheInfo) cacheInfo.style.display = remote ? 'none' : '';
+  renderTrackList();
+  if (typeof updateStatus==='function') updateStatus();
+}
+document.getElementById('mode-toggle').addEventListener('click',()=>{
+  mode = (mode==='remote') ? 'local' : 'remote';
+  localStorage.setItem('audioMode', mode);
+  applyMode();
+});
+applyMode();
+
+</script>
+
+<!-- ✨ 选中歌词 → LLM 讲解 -->
+<script>window.INTERPRET_BASE='';</script>
+<script src="/static/interpret-widget.js?v=20260812b"></script>
+<script>
+(function(){
+  const lyricsDiv=document.getElementById('lyrics');
+  function curTitle(){
+    const s=(typeof SUITES!=='undefined'?SUITES.find(x=>x.id===currentSuite):null);
+    const t=(typeof currentTrack!=='undefined'&&currentTrack)?(currentTrack.name||''):'';
+    return [s?s.label:'',t].filter(Boolean).join(' · ');
+  }
+  // Context sent to the LLM = the selected line(s) plus this many lines either side.
+  // Enough to resolve pronouns / "that", without shipping the whole transcript on every
+  // turn: it used to send the entire episode (~2.2k chars for Peppa, ~3k for forrest_gump),
+  // and the widget re-sends payload.context on EVERY follow-up. A ±5 window is ~12% of that.
+  const CTX_LINES=5;   // 选中行前后各 5 句 → 连选中行共 11 句
+  function buildCtx(r){
+    if(typeof lyrics==='undefined'||!lyrics.length) return {context:r.toString().trim(),parts:null};
+    const strip=(typeof stripMark==='function')?stripMark:(s=>s);
+    const rows=Array.prototype.filter.call(lyricsDiv.querySelectorAll('.line'),
+      el=>{ try{ return r.intersectsNode(el); }catch(_){ return false; } });
+    if(!rows.length) return {context:r.toString().trim(),parts:null};
+    const i0=+rows[0].dataset.index, i1=+rows[rows.length-1].dataset.index;
+    const lo=Math.max(0,i0-CTX_LINES), hi=Math.min(lyrics.length-1,i1+CTX_LINES);
+    const context=lyrics.slice(lo,hi+1).map(l=>strip(l.text)).join('\n');
+    // Single-line selection: hand the drawer exact in-line offsets, so 原句 highlights the
+    // occurrence you actually picked. (The indexOf fallback marks the FIRST match in the
+    // context, which lands on the wrong line for a repeated word.)
+    let parts=null;
+    if(rows.length===1){
+      try{
+        const el=rows[0], full=el.textContent, raw=r.toString();
+        const pre=document.createRange(); pre.selectNodeContents(el); pre.setEnd(r.startContainer,r.startOffset);
+        const off=pre.toString().length;
+        parts={left:full.slice(0,off),sel:full.slice(off,off+raw.length),right:full.slice(off+raw.length)};
+      }catch(_){ parts=null; }
+    }
+    return {context,parts};
+  }
+  function handleSel(e){
+    if(!window.Interpret) return;
+    if(e.target.closest&&e.target.closest('.nrw-pop,#nrw-drawer,.nrw-chip')) return;
+    setTimeout(()=>{
+      const sel=window.getSelection();
+      const text=(sel&&sel.toString()||'').trim();
+      if(!text){ Interpret.hidePopup(); return; }
+      const a=sel.anchorNode, ael=a?(a.nodeType===3?a.parentNode:a):null;
+      if(!(lyricsDiv&&ael&&lyricsDiv.contains(ael))){ Interpret.hidePopup(); return; }
+      const r=sel.getRangeAt(0);
+      const rect=r.getBoundingClientRect();
+      if(!rect.width&&!rect.height){ Interpret.hidePopup(); return; }
+      const {context,parts}=buildCtx(r);
+      const below=window.matchMedia('(pointer: coarse)').matches;
+      Interpret.popupAt(rect,{text:text,title:curTitle(),context:context,parts:parts},below);
+    },10);
+  }
+  document.addEventListener('mouseup',handleSel);
+  document.addEventListener('touchend',handleSel,{passive:true});
+
+  // Selecting lyrics pauses playback; it resumes when the ✨ popup goes away
+  // (解读 / 取消 / 点别处) or when you tap the play control.
+  let _selShown=false, _selWasPlaying=false;
+  document.addEventListener('interpret:popupshow',()=>{
+    if(_selShown) return;                 // ignore re-selects while popup already up
+    _selShown=true; _selWasPlaying=!audio.paused; audio.pause();
+  });
+  document.addEventListener('interpret:popuphide',()=>{
+    if(!_selShown) return;
+    _selShown=false; if(_selWasPlaying) audio.play().catch(()=>{});
+  });
+  // Reading the ✨ 解读 drawer pauses playback; closing it (× / Esc / 点外面 / 划走)
+  // resumes — but only if it was playing before. Event order matters: clicking 解读
+  // does hidePopup() then open() in ONE task, so popuphide above has already resumed
+  // playback by the time we read !audio.paused — which is exactly "was it playing
+  // before the selection". The play→pause round trip stays inside that one task, so
+  // nothing is ever audible.
+  let _drawerOpen=false, _drawerWasPlaying=false;
+  document.addEventListener('interpret:open',()=>{
+    if(_drawerOpen) return;               // already open (re-select goes to background) -> keep the original state
+    _drawerOpen=true; _drawerWasPlaying=!audio.paused; audio.pause();
+  });
+  document.addEventListener('interpret:close',()=>{
+    if(!_drawerOpen) return;
+    // never resume into edit mode: enterEdit() deliberately stopped playback, so a
+    // drawer opened before editing must not restart it behind the editor's back.
+    _drawerOpen=false; if(_drawerWasPlaying && !editMode) audio.play().catch(()=>{});
+    _drawerWasPlaying=false;
+  });
+  // ▶ on the popup: force playback (replay) regardless of prior state
+  document.addEventListener('interpret:play',()=>{ _selShown=false; audio.play().catch(()=>{}); });
+  // tapping the play control dismisses the popup and lets native playback take over
+  [vidEl,audEl].forEach(el=>el.addEventListener('play',()=>{
+    if(_selShown){ _selShown=false; if(window.Interpret) Interpret.hidePopup(); }
+  }));
+})();
+</script>
+
+</body>
+</html>
