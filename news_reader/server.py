@@ -446,9 +446,57 @@ async def board_dismiss(request: Request):
     key = payload.get("key")
     if key:
         with board._lock:
-            board._dismissed.add(key)
-            board.DISMISSED_FILE.write_text(json.dumps(sorted(board._dismissed)))
+            # 记下删除时间和条目本身, 这样"最近删除"既能按时间筛, 也能在 feed 轮换后
+            # 仍然显示得出删掉的是哪一条(页面会把 title/source/date 一起 POST 过来)
+            board._dismissed[key] = {
+                "ts": time.time(),
+                "title": (payload.get("title") or "")[:300],
+                "source": (payload.get("source") or "")[:40],
+                "date": (payload.get("date") or "")[:40],
+            }
+            board._save_dismissed()
     return {"ok": True}
+
+
+@app.get("/dismissed")
+async def board_dismissed(minutes: int = 0):
+    """最近删除, 只返回有删除时间(ts>0)的条目。
+
+    ts=0 的是升级前老格式留下的, 既没有时间也没有标题 —— 列出来只会显示成
+    「时间未知 / 无标题记录」, 看着像 bug, 所以直接不返回。
+    标题缺失时(例如仪表盘的 ✕ 没把标题 POST 过来)就地从新闻缓存里补, 不发网络请求。
+    """
+    now = time.time()
+    with board._lock:
+        rows = [{"key": k, **v} for k, v in board._dismissed.items() if v.get("ts")]
+        cached = (board._caches["news"]["data"] or {}).get("items") or []
+    feed = {(it.get("link") or it.get("title")): it for it in cached}
+    for r in rows:
+        src = feed.get(r["key"])
+        if src:
+            for f in ("title", "source", "date"):
+                if not r.get(f):
+                    r[f] = src.get(f) or ""
+    if minutes > 0:
+        rows = [r for r in rows if now - r["ts"] <= minutes * 60]
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    return {"items": rows, "now": now}
+
+
+@app.post("/undismiss")
+async def board_undismiss(request: Request):
+    try:
+        payload = json.loads((await request.body()) or b"{}")
+    except Exception:
+        payload = {}
+    key = payload.get("key")
+    restored = False
+    if key:
+        with board._lock:
+            restored = board._dismissed.pop(key, None) is not None
+            if restored:
+                board._save_dismissed()
+    return {"ok": restored}
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")

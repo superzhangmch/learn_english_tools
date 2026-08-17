@@ -44,12 +44,33 @@ except ImportError:
 # NMC national radar mosaic (updated every ~6 min upstream)
 RADAR_PAGE = "http://www.nmc.cn/publish/radar/chinaall.html"
 
-# dismissed news items ("看过了"), persisted across restarts
+# dismissed news items ("看过了"), persisted across restarts.
+#   key -> {"ts": epoch, "title": …, "source": …, "date": …}
+# 以前存的是 sorted(set), 只有 key —— 于是"刚才误删的那条"根本查不回来: 既不知道什么时候
+# 删的, 也不知道删掉的是什么。带上 ts 和条目自身的字段, 才能做"最近删除 / 恢复"。
 DISMISSED_FILE = Path(__file__).parent / "dismissed.json"
-try:
-    _dismissed = set(json.loads(DISMISSED_FILE.read_text()))
-except Exception:
-    _dismissed = set()
+# 离开 feed 窗口后还保留多久, 好让"最近删除"在 feed 轮换后依然恢复得回来
+TRASH_TTL = 24 * 3600
+
+
+def _load_dismissed() -> dict:
+    try:
+        raw = json.loads(DISMISSED_FILE.read_text())
+    except Exception:
+        return {}
+    if isinstance(raw, list):     # 旧格式: 只有 key 的数组, ts=0 表示"删除时间未知"
+        return {k: {"ts": 0} for k in raw if isinstance(k, str)}
+    if isinstance(raw, dict):
+        return {k: (v if isinstance(v, dict) else {"ts": 0}) for k, v in raw.items()}
+    return {}
+
+
+_dismissed = _load_dismissed()
+
+
+def _save_dismissed() -> None:
+    """调用方必须已持有 _lock。"""
+    DISMISSED_FILE.write_text(json.dumps(_dismissed, ensure_ascii=False, sort_keys=True))
 
 _lock = threading.Lock()
 _caches = {
@@ -125,9 +146,15 @@ def fetch_news() -> dict:
     items = [it for i, it in enumerate(items) if i in keep]  # keep interleaved display order
     if not items:
         raise RuntimeError("all feeds failed")
-    with _lock:  # prune dismissed keys that left the feed window
-        _dismissed.intersection_update({it["link"] or it["title"] for it in items})
-        DISMISSED_FILE.write_text(json.dumps(sorted(_dismissed)))
+    with _lock:
+        # 原来是「离开 feed 窗口就立刻忘掉」, 那样刚删的条目一轮换就再也恢复不了。
+        # 现在多留 TRASH_TTL, 期间仍可从"最近删除"里捞回来; 之后照旧清掉, 文件不会无限长。
+        live = {it["link"] or it["title"] for it in items}
+        now = time.time()
+        for k, v in list(_dismissed.items()):
+            if k not in live and now - (v.get("ts") or 0) > TRASH_TTL:
+                del _dismissed[k]
+        _save_dismissed()
     return {"items": items}
 
 
