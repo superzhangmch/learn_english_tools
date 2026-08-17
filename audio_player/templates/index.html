@@ -86,7 +86,7 @@
     }
     .btn:hover { filter: brightness(1.08); }
     .btn:active { transform: translateY(1px); }
-    #file-input { display: none; }
+    #file-input, #dir-input { display: none; }
     .picker-info { font-size: 14px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
     .picker-info code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
     #trackList { margin-top: 8px; max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -332,6 +332,8 @@
   <select id="suite-select" style="padding:6px 10px;border-radius:8px;font-size:15px"></select>
   <label class="btn" for="file-input" id="choose-label">📁 Choose</label>
   <input type="file" id="file-input" accept="audio/*,video/mp4,.mp3,.mp4" multiple>
+  <label class="btn" for="dir-input" id="choose-dir-label" style="display:none">📂 整个文件夹</label>
+  <input type="file" id="dir-input" webkitdirectory multiple>
 </div>
 <div class="picker"><div class="picker-info" id="picker-info"></div></div>
 
@@ -466,15 +468,36 @@ function renderTrackList() {
   });
 }
 
-fileInput.addEventListener('change', e => {
-  const files = Array.from(e.target.files);
-  for (const f of files) {
-    const base = f.name.replace(/\.[^.]+$/, '');
-    localFiles.set(base, f);
-  }
-  updateStatus();
+/* Take a FileList from either picker: match by basename, then cache. Media-only —
+ * a folder pick enumerates the WHOLE directory and `accept` is ignored in directory
+ * mode, so without this we'd cache cover art, .DS_Store and subtitles. It matters for
+ * the plain multi-select too: on iOS you tap "select all" in the folder and get
+ * whatever else is sitting in it. */
+const MEDIA_RE = /\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|m4v|mov)$/i;
+async function addLocalFiles(list) {
+  const all = Array.from(list || []);
+  const media = all.filter(f => MEDIA_RE.test(f.name));
+  const skipped = all.length - media.length;
+  for (const f of media) localFiles.set(f.name.replace(/\.[^.]+$/, ''), f);
   renderTrackList();
-});
+  await updateStatus(skipped);                 // show matches before the writes finish
+  for (const f of media) {
+    try { await idbPut(f.name.replace(/\.[^.]+$/, ''), f); } catch (_) {}
+  }
+  await updateStatus(skipped);
+}
+fileInput.addEventListener('change', e => { addLocalFiles(e.target.files); });
+const dirInput = document.getElementById('dir-input');
+// iOS Safari has the webkitdirectory property but its picker cannot select a folder,
+// so the button is a dead end there — only show it where picking actually works. On
+// iPhone use 📁 Choose and "select all" inside the folder; same result, one extra tap.
+const canPickDir = dirInput && ('webkitdirectory' in dirInput) &&
+  !/iPhone|iPad|iPod/.test(navigator.userAgent) &&
+  !(/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+if (canPickDir) {
+  document.getElementById('choose-dir-label').style.display = '';
+  dirInput.addEventListener('change', e => { addLocalFiles(e.target.files); });
+}
 
 function play(track, btn) {
   if (mode !== 'remote' && !localFiles.has(track.name)) {
@@ -1072,19 +1095,21 @@ function idb(){return _db?Promise.resolve(_db):new Promise((res,rej)=>{const r=i
 async function idbPut(k,b){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('audio','readwrite');t.objectStore('audio').put(b,k);t.oncomplete=res;t.onerror=()=>rej(t.error);});}
 async function idbAll(){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('audio','readonly'),out=[],c=t.objectStore('audio').openCursor();c.onsuccess=e=>{const cur=e.target.result;if(cur){out.push([cur.key,cur.value]);cur.continue();}else res(out);};c.onerror=()=>rej(c.error);});}
 async function idbClear(){const db=await idb();return new Promise(res=>{const t=db.transaction('audio','readwrite');t.objectStore('audio').clear();t.oncomplete=res;});}
-async function updateStatus(){
+async function updateStatus(skipped){
   if(!pickerInfo) return;
   const total = TRACKS.length;
   if (mode==='remote'){ pickerInfo.innerHTML = total+' episodes'; if(cacheInfo)cacheInfo.innerHTML=''; return; }
   const matched = TRACKS.filter(t=>localFiles.has(t.name)).length;
   let cached=0; try{ cached=(await idbAll()).length; }catch(_){}
-  pickerInfo.innerHTML = total+' eps · '+matched+' matched · '+cached+' cached'+(cached?' · <a href="#" id="clr">clear</a>':'');
+  // report non-media the picker handed us, so a folder pick isn't silently partial
+  const skip = skipped ? ' · '+skipped+' skipped' : '';
+  pickerInfo.innerHTML = total+' eps · '+matched+' matched · '+cached+' cached'+skip+(cached?' · <a href="#" id="clr">clear</a>':'');
   if(cacheInfo) cacheInfo.innerHTML='';
   const a=document.getElementById('clr');
   if(a) a.onclick=async ev=>{ ev.preventDefault(); if(confirm('清除缓存?')){ await idbClear(); localFiles.clear(); updateStatus(); renderTrackList(); } };
 }
 async function updateCacheInfo(){ return updateStatus(); }
-fileInput.addEventListener('change',async e=>{for(const f of e.target.files){try{await idbPut(f.name.replace(/\.[^.]+$/,''),f);}catch(_){}}updateCacheInfo();});
+// (the caching write lives in addLocalFiles now — one place, and it filters non-media)
 async function restoreCachedAudio(){try{for(const [k,b] of await idbAll())localFiles.set(k,b);}catch(_){}}
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
 (async()=>{await restoreCachedAudio();await updateCacheInfo();applyFilter();})();
