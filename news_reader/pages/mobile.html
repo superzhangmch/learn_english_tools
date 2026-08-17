@@ -55,7 +55,27 @@
   /* 三个都是图标了(✨解读 / 📖阅读 / 🗑删除)。emoji 宽度各不相同, 所以用 min-width +
      居中把三个按钮撑成一样大, 免得一排看着参差不齐; 字号比原来的文字略大好点。 */
   .go, .x, .ex { display: inline-block; border: 1px solid var(--fg); border-radius: 6px; padding: 1px 6px; margin-left: 8px; min-width: 2.2em; text-align: center; font-size: 15px; line-height: 1.45; font-weight: 700; text-decoration: none; color: var(--fg); white-space: nowrap; vertical-align: 1px; }
+  /* 删除离另外两个远一点: 三个图标一样大又挨着, 拇指最容易在 📖 旁边点到 🗑。
+     防误触只用这两招: 拉开距离(事前) + 表头 ♻ 里恢复(事后)。
+     刻意不做二次确认, 也刻意不在删完弹提示 —— 每次删都要多看一眼太干扰。 */
+  .x { margin-left: 18px; }
   .status { text-align: center; color: var(--status); margin-top: 22vh; font-size: 15px; }
+
+
+  /* 回收站: 最近删除, 每条一个「恢复」 */
+  #trashbox {
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    margin: 6px 0 10px; background: var(--panel); font-size: 13.5px;
+  }
+  #trashbox[hidden] { display: none; }
+  #trashbox h2 { font-size: 13.5px; font-weight: 800; margin-bottom: 8px; display: flex; gap: 8px; }
+  #trashbox h2 .cls { margin-left: auto; cursor: pointer; color: var(--status); }
+  #trashbox .row { display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
+  #trashbox .row .ago { color: var(--status); font-size: 11.5px; white-space: nowrap; flex: none; }
+  #trashbox .row .tt { flex: 1; overflow-wrap: anywhere; }
+  #trashbox .row .rs { flex: none; border: 1px solid var(--fg); border-radius: 6px;
+                       padding: 1px 8px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  #trashbox .empty { color: var(--status); }
   a, button, .x, .go, .ex { touch-action: manipulation; }
 </style>
 </head>
@@ -63,9 +83,11 @@
   <header>
     <h1>📰 News</h1>
     <a id="todesk" class="hb" href="/index.html" title="切换到桌面版" hidden>桌面版</a>
+    <button id="trash" class="hb" title="最近删除（可恢复）">♻</button>
     <button id="refresh" class="hb" title="刷新">↻</button>
     <button id="gear" class="hb nrw-gear" title="设置（模型 / 字号 / 显示模式）">⚙</button>
   </header>
+  <div id="trashbox" hidden></div>
   <ul id="list"></ul>
   <div class="status" id="status">加载中…</div>
 
@@ -144,14 +166,66 @@
     Interpret.open({ text: title, title: title, context: title, anchor: ti }, true, 'interpret');
   });
 
-  // ✕ dismiss (persisted on the server)
+  // 🗑 dismiss (persisted on the server)。删完**不提示** —— 每次删都弹一条太干扰,
+  // 而且删除本来就不丢数据(只是把它从 /news 里过滤掉)。误删就去表头的 ♻ 里恢复。
+  // title/source/date 一起 POST 过去: 回收站要靠它们显示"删掉的是哪一条", 否则只剩 URL。
   list.addEventListener('click', e => {
-    if (!e.target.classList.contains('x')) return;
-    const key = decodeURIComponent(e.target.dataset.k);
-    fetch('/dismiss', { method: 'POST', body: JSON.stringify({ key }) });
-    items = items.filter(it => (it.link || it.title) !== key);
-    e.target.closest('li').remove();   // drop only this row; don't re-render (keeps other markers alive)
+    const b = e.target.closest('.x'); if (!b) return;
+    const li = b.closest('li'), ti = li.querySelector('.ti');
+    const key = decodeURIComponent(b.dataset.k);
+    const it = items.find(x => (x.link || x.title) === key);
+    fetch('/dismiss', { method: 'POST', body: JSON.stringify({
+      key,
+      title: it ? it.title : (ti ? ti.textContent.trim() : ''),
+      source: it ? it.source : '',
+      date: it ? (it.date || '') : '',
+    }) });
+    items = items.filter(x => (x.link || x.title) !== key);
+    li.remove();   // 只摘这一行, 不重新 render(其他行的解读 marker 才不会没)
   });
+
+  // ♻ 回收站: 最近删除, 每条一个「恢复」。这是误删的唯一找回入口。
+  // 服务端只返回有删除时间的条目, 所以这里不必再有"时间未知"这种兜底文案。
+  // 万一标题也缺(仪表盘的 ✕ 不带标题, 且已不在 feed 缓存里), 就退化成 URL 尾段 ——
+  // 显示点真东西, 也比"（无标题记录）"这种像故障的占位符好。
+  const shortKey = k => { try { return decodeURIComponent(k).split('/').filter(Boolean).pop().slice(0, 60); } catch (e) { return k.slice(0, 60); } };
+  const ago = ts => {
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 60) return Math.round(s) + ' 秒前';
+    if (s < 3600) return Math.round(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.round(s / 3600) + ' 小时前';
+    return Math.round(s / 86400) + ' 天前';
+  };
+  const box = $('#trashbox');
+  async function openTrash() {
+    box.hidden = false;
+    box.innerHTML = '<h2>最近删除<span class="cls">关闭</span></h2><div class="empty">读取中…</div>';
+    box.querySelector('.cls').onclick = () => { box.hidden = true; };
+    let rows = [];
+    try { rows = (await (await fetch('/dismissed', { cache: 'no-store' })).json()).items || []; }
+    catch (e) { box.querySelector('.empty').textContent = '读取失败：' + e.message; return; }
+    // 只看最近 10 条: 误删都是刚发生的事, 更早的翻出来也没用, 列表短才扫得快。
+    // 不足 10 条就只显示实有的几条 —— 绝不用占位行填满, 那看着像 bug。
+    const shown = rows.slice(0, 10), more = rows.length - shown.length;
+    const head = `<h2>最近删除${shown.length ? ' · ' + shown.length + ' 条' : ''}` +
+      (more > 0 ? `<span class="ago">（另有 ${more} 条更早）</span>` : '') +
+      `<span class="cls">关闭</span></h2>`;
+    box.innerHTML = head + (shown.length ? shown.map(r =>
+      `<div class="row"><span class="ago">${ago(r.ts)}</span>` +
+      `<span class="tt">${esc(r.title) || esc(shortKey(r.key))}` +
+      (r.source ? ` <span class="ago">${esc(r.source)}</span>` : '') + `</span>` +
+      `<span class="rs" data-k="${encodeURIComponent(r.key)}">恢复</span></div>`
+    ).join('') : '<div class="empty">还没有删除过条目</div>');
+    box.querySelector('.cls').onclick = () => { box.hidden = true; };
+    box.querySelectorAll('.rs').forEach(btn => btn.onclick = async () => {
+      btn.textContent = '…';
+      await fetch('/undismiss', { method: 'POST', body: JSON.stringify(
+        { key: decodeURIComponent(btn.dataset.k) }) });
+      await load(true);      // 恢复的条目可能不在当前 DOM 里, 重新拉一次最省心
+      openTrash();
+    });
+  }
+  $('#trash').onclick = () => { box.hidden ? openTrash() : (box.hidden = true); };
   $('#refresh').onclick = () => load(true);
 
   // select a word/phrase in a title -> shared interpret widget (right drawer + chat)
