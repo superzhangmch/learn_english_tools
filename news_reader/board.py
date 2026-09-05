@@ -49,8 +49,6 @@ RADAR_PAGE = "http://www.nmc.cn/publish/radar/chinaall.html"
 # 以前存的是 sorted(set), 只有 key —— 于是"刚才误删的那条"根本查不回来: 既不知道什么时候
 # 删的, 也不知道删掉的是什么。带上 ts 和条目自身的字段, 才能做"最近删除 / 恢复"。
 DISMISSED_FILE = Path(__file__).parent / "dismissed.json"
-# 离开 feed 窗口后还保留多久, 好让"最近删除"在 feed 轮换后依然恢复得回来
-TRASH_TTL = 24 * 3600
 
 
 def _load_dismissed() -> dict:
@@ -71,6 +69,66 @@ _dismissed = _load_dismissed()
 def _save_dismissed() -> None:
     """调用方必须已持有 _lock。"""
     DISMISSED_FILE.write_text(json.dumps(_dismissed, ensure_ascii=False, sort_keys=True))
+
+
+# 已经露过面的新闻条目, 持久保存。
+#   key -> {source, title, link, date, first_seen, idx}
+# feed 只给最近 MAX_AGE_H 小时、每源 MAX_PER_FEED 条, 所以列表原本 100% 等于"当次抓取
+# 的内容": 一条新闻滚出窗口就从界面上消失了, 哪怕你从没删它、还想继续盯着它。
+# 现在抓取结果并入这个仓库, 界面显示的是"曾经出现过、未被删除、且进队不超过一周"的条目。
+ITEMS_FILE = Path(__file__).parent / "items.json"
+# 进入队列超过这么久就出队, 不论读过没有。按 first_seen(进入列表的时刻)算而不是按
+# pubDate —— 队列的语义是"它在我这儿待了多久"。稳态大约 7 x 每天 30 条 = 200 多条。
+RETENTION_DAYS = 7
+MAX_ITEMS = 5000   # 安全阀; 有 RETENTION_DAYS 在, 正常永远到不了。真触发会打日志, 不静默丢
+
+
+def _load_items() -> dict:
+    try:
+        raw = json.loads(ITEMS_FILE.read_text())
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+_items = _load_items()
+
+
+def _save_items() -> None:
+    """调用方必须已持有 _lock。"""
+    ITEMS_FILE.write_text(json.dumps(_items, ensure_ascii=False, sort_keys=True))
+
+
+def _merge_items(fresh: list) -> list:
+    """把本次抓到的条目并入仓库, 返回全部条目(新的在前)。调用方必须已持有 _lock。
+
+    已存在的条目不动: first_seen / idx 保持不变, 排序才稳定 —— 否则每次抓取都会把
+    仍在 feed 里的旧条目重新顶到最前面。
+    """
+    now = time.time()
+    for idx, it in enumerate(fresh):
+        key = it["link"] or it["title"]
+        if key and key not in _items:
+            _items[key] = {**it, "first_seen": now, "idx": idx}
+    # 出队: 待够 RETENTION_DAYS 就清掉。缺 first_seen 的(手工改过文件之类)按"刚进来"
+    # 算, 给它完整一周, 而不是当成很旧的立刻删掉。
+    cutoff = now - RETENTION_DAYS * 86400
+    expired = [k for k, v in _items.items() if (v.get("first_seen") or now) < cutoff]
+    for k in expired:
+        del _items[k]
+    if expired:
+        print(f"  news: {len(expired)} 条进队超过 {RETENTION_DAYS} 天, 出队", flush=True)
+    # 新批次在前; 同一批次内保持抓取时的交错顺序(BBC, NPR, BBC, ...)
+    rows = sorted(_items.values(),
+                  key=lambda r: (-(r.get("first_seen") or 0), r.get("idx") or 0))
+    if len(rows) > MAX_ITEMS:
+        for r in rows[MAX_ITEMS:]:
+            _items.pop(r.get("link") or r.get("title"), None)
+        print(f"  news: 仓库达到 {len(rows)} 条, 丢弃最旧 {len(rows) - MAX_ITEMS} 条"
+              f"(上限 {MAX_ITEMS})", flush=True)
+        rows = rows[:MAX_ITEMS]
+    _save_items()
+    return rows
 
 _lock = threading.Lock()
 _caches = {
@@ -147,15 +205,13 @@ def fetch_news() -> dict:
     if not items:
         raise RuntimeError("all feeds failed")
     with _lock:
-        # 原来是「离开 feed 窗口就立刻忘掉」, 那样刚删的条目一轮换就再也恢复不了。
-        # 现在多留 TRASH_TTL, 期间仍可从"最近删除"里捞回来; 之后照旧清掉, 文件不会无限长。
-        live = {it["link"] or it["title"] for it in items}
-        now = time.time()
-        for k, v in list(_dismissed.items()):
-            if k not in live and now - (v.get("ts") or 0) > TRASH_TTL:
-                del _dismissed[k]
+        merged = _merge_items(items)
+        # 删除标记只在条目本身也不在仓库里时才清理。条目现在会一直留着, 所以它的
+        # "已删除"标记也必须一直留着 —— 否则下次抓取它就又冒出来了。
+        for k in [k for k in _dismissed if k not in _items]:
+            del _dismissed[k]
         _save_dismissed()
-    return {"items": items}
+    return {"items": merged}
 
 
 def assess(code, feels, uv, rain, o3, pm25) -> dict:
@@ -413,8 +469,10 @@ class Handler(SimpleHTTPRequestHandler):
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 key = json.loads(body)["key"]
                 with _lock:
-                    _dismissed.add(key)
-                    DISMISSED_FILE.write_text(json.dumps(sorted(_dismissed)))
+                    # 和 server.py 的 /dismiss 保持同一格式; 这里以前是 _dismissed.add()
+                    # 加旧格式写盘 —— dict 没有 .add, 一调就炸, 还会覆写掉时间戳
+                    _dismissed[key] = {"ts": time.time(), "title": "", "source": "", "date": ""}
+                    _save_dismissed()
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_error(400, str(e))
