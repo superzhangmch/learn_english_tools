@@ -6,6 +6,8 @@
  *   window.INTERPRET_BASE   base URL of the reader API (default '' = same origin)
  *   window.INTERPRET_STREAM set false to render the answer once at the end
  *                           (e-ink friendly: avoids per-chunk refresh flicker)
+ *   window.INTERPRET_NEWS_URL  if set, the ⚙ menu grows a "📰 新闻列表" link to it
+ *                           (for the reader, which has no other way back)
  *
  * API:
  *   Interpret.popupAt(rect, payload, below)  show the ✨ button near a selection
@@ -23,6 +25,8 @@
 (function () {
   const BASE = (window.INTERPRET_BASE || '').replace(/\/$/, '');
   const STREAM = window.INTERPRET_STREAM !== false;
+  // 设了才在 ⚙ 菜单里出现"📰 新闻列表"一项(见 ensureDOM)。同标签页跳转。
+  const NEWS_URL = window.INTERPRET_NEWS_URL || '';
   const FS_KEY = 'nrw_ans_fs', FS_MIN = 13, FS_MAX = 32, FS_DEF = 19;
 
   const CSS = `
@@ -208,7 +212,12 @@
       '<div class="grp"><span class="lbl">模型</span><span class="models"></span></div>' +
       '<div class="grp"><span class="lbl">字号</span><button class="sb" data-d="-1">A−</button><button class="sb" data-d="1">A+</button></div>' +
       '<div class="grp"><span class="lbl">显示</span><button class="sb tb" data-t="light">☀︎ 浅色</button><button class="sb tb" data-t="dark">☾ 深色</button></div>' +
-      '<div class="grp"><a class="sb" href="/reader/?list=1" target="_blank" rel="noopener">📚 待读列表</a></div>';
+      '<div class="grp"><a class="sb" href="/reader/?list=1" target="_blank" rel="noopener">📚 待读列表</a></div>' +
+      // 回新闻列表的入口: 只有把 window.INTERPRET_NEWS_URL 设上的页面才出现。
+      // 做成可配置而不是写死, 因为这份 widget 同时被新闻列表自己(mobile/dashboard)加载 ——
+      // 在列表页上再给一个"去列表"是多余的; 另外两个项目(book_reader / audio_player)各存一份
+      // 拷贝, 将来若从这里同步改动, 也不会被带上一条新闻专属的链接。
+      (NEWS_URL ? '<div class="grp"><a class="sb" href="' + NEWS_URL + '">📰 新闻列表</a></div>' : '');
     document.body.appendChild(menuEl);
 
     selBox = drawer.querySelector('.sel');

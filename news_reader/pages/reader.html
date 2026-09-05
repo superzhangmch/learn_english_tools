@@ -252,7 +252,10 @@
   </main>
 
 
-<script src="/static/interpret-widget.js?v=20260814b"></script>
+<!-- 阅读页(列表视图和详情视图共用这个 header)没有别的回路, 所以在 ⚙ 里给一个入口。
+     '/' 会按 UA 跳: 电脑去仪表盘, 手机去新闻列表。 -->
+<script>window.INTERPRET_NEWS_URL = '/';</script>
+<script src="/static/interpret-widget.js?v=20260901a"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const main = $('#main'), urlInput = $('#url'), goBtn = $('#go');
