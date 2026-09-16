@@ -25,7 +25,7 @@
     font-family:var(--sans,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Heiti SC",sans-serif);touch-action:manipulation}
   .nrw-pop>span{display:inline-block;padding:8px 14px;cursor:pointer}
   .nrw-pop>span:active{background:var(--accent-soft,#eee)}
-  .nrw-pop .nrw-go,.nrw-pop .nrw-x{border-left:1.5px solid var(--ink,#111)}
+  .nrw-pop .nrw-go,.nrw-pop .nrw-fr,.nrw-pop .nrw-cl,.nrw-pop .nrw-x{border-left:1.5px solid var(--ink,#111)}
   .nrw-pop.below{transform:translate(-50%,0)}
   .nrw-pop::after{content:"";position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);
     border:5px solid transparent;border-top-color:var(--ink,#111);border-bottom:none}
@@ -112,7 +112,10 @@
     const st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
 
     pop = document.createElement('div'); pop.className = 'nrw-pop';
-    pop.innerHTML = '<span class="nrw-play" title="播放">▶</span><span class="nrw-go">✨ 解读</span><span class="nrw-x" title="取消">✕</span>';
+    pop.innerHTML = '<span class="nrw-play" title="播放">▶</span><span class="nrw-go">✨ 解读</span>'
+      + '<span class="nrw-fr" title="看这一刻的画面">🖼</span>'
+      + '<span class="nrw-cl" title="看这一句的视频片段">🎬</span>'
+      + '<span class="nrw-x" title="取消">✕</span>';
     pop.querySelector('.nrw-play').onclick = (e) => { e.stopPropagation(); emit('play'); hidePopup(); };
     pop.querySelector('.nrw-go').onclick = (e) => {
       e.stopPropagation();
@@ -121,6 +124,10 @@
       // UNLESS a drawer is already showing — then background so it isn't disrupted.
       open(payload, isMobile() || isOpen());
     };
+    // hidePopup() first (it resumes playback), then emit: the host's frame handler
+    // pauses again in the SAME task, so the round trip is never audible.
+    pop.querySelector('.nrw-fr').onclick = (e) => { e.stopPropagation(); hidePopup(); emit('frame'); };
+    pop.querySelector('.nrw-cl').onclick = (e) => { e.stopPropagation(); hidePopup(); emit('clip'); };
     pop.querySelector('.nrw-x').onclick = (e) => { e.stopPropagation(); hidePopup(); };
     document.body.appendChild(pop);
 
@@ -194,6 +201,13 @@
     pop.classList.toggle('below', placeBelow);
     pop.style.left = cx + 'px';
     pop.style.top = top + 'px';
+    // Ask the host per-selection whether a frame is available (an audio collection
+    // only has one if a video twin exists), so the button is never a dead end.
+    const _ok=(typeof window.INTERPRET_FRAME_OK==='function' && window.INTERPRET_FRAME_OK());
+    for(const c of ['.nrw-fr','.nrw-cl']){
+      const el=pop.querySelector(c);
+      if(el) el.style.display=_ok ? '' : 'none';
+    }
     emit('popupshow');   // host can pause playback while the selection popup is up
   }
 

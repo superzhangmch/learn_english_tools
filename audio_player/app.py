@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, send_file, abort, Response
-import os, re, shutil, json, urllib.request, urllib.error
+import os, re, shutil, json, subprocess, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 app=Flask(__name__)
@@ -31,6 +31,30 @@ SYS_PROMPT=("你是英语学习助手。下面的英文来自 ASR 自动转写�
   "- 如果背后有值得一提的文化、历史、社会等背景知识，请务必介绍（这部分可以稍微多讲一点，但整体仍保持简洁）。\n"
   "深度随难度而定，但整体都要短。不要讲发音/连读；需要读音时只给 IPA 音标。"
   "若疑似 ASR 转写错误，简短指出更可能的原词。")
+def _ffmpeg():
+    """System ffmpeg if present, else the static binary imageio-ffmpeg ships.
+    The pip-installed fallback is what lets frame/clip extraction work on a host
+    where ffmpeg cannot be installed system-wide (no root)."""
+    p=shutil.which("ffmpeg")
+    if p: return p
+    try:
+        import imageio_ffmpeg; return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception: return None
+FFMPEG=_ffmpeg()
+# Single-word selections get the four-part answer, etymology included — ported
+# verbatim from book_reader so the two tools answer a word the same way. Defined
+# by what a word is NOT (no whitespace) rather than by a character whitelist: the
+# whitelist version silently dropped every accented word, so `café` fell through
+# to the phrase rules and lost its IPA and etymology — exactly the words you stop on.
+_LATIN=re.compile(r'[A-Za-z\u00c0-\u024f]')
+def _is_single_word(t):
+    return bool(t) and len(t)<=40 and not re.search(r'\s',t) and _LATIN.search(t) is not None
+SINGLE_WORD_RULE=("【选中的是单个单词——四项都要给，即使是 house、the 这类最常见的词】\n"
+  "① **音标**：IPA，英式美式均可。\n"
+  "② **此处意思**：结合本句语境的确切含义 + 地道中文翻译。\n"
+  "③ **词源**：词根/词缀、来自哪门语言、本义如何演变到今义。\n"
+  "④ **本句**：这个词所在那句话的中文大意。\n"
+  "常见词把①②③④各写一行即可，不必展开。")
 ROOT=os.path.expanduser(os.environ.get("LYRICS_ROOT","~/lyrics_data"))
 LINE_RE=re.compile(r'^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,2}))?\]\s?(.*)$')
 SKIP=re.compile(r'\.(v1|before|sensevoice|whisperonly|crosscheck)$')
@@ -51,7 +75,18 @@ def suites():
             d=os.path.join(ROOT,name)
             if os.path.isdir(d) and has_lyrics(d):     # isdir 跟随软链
                 c=read_cfg(d)
-                out.append({"id":name,"label":c.get("label",name),"type":c.get("type","audio"),"_dir":os.path.realpath(d)})
+                out.append({"id":name,"label":c.get("label",name),"type":c.get("type","audio"),
+                            "video":c.get("video"),"_dir":os.path.realpath(d)})
+    # An audio collection can name a video twin in _config.json as {"video": "<id>"};
+    # otherwise the "<id>_video" convention is used when such a collection exists. The
+    # twin shares track basenames and timeline, so the player can pull a still frame at
+    # the audio's current time (verified: mp3/mp4 durations agree within 0.04s).
+    ids={s["id"] for s in out if s["type"]=="video"}
+    for s in out:
+        if s["type"]=="audio" and not s["video"]:
+            s["video"]=(s["id"]+"_video") if (s["id"]+"_video") in ids else None
+        elif s["type"]=="video":
+            s["video"]=None
     return out
 def smap(): return {s["id"]:s for s in suites()}
 def list_tracks(d):
@@ -72,7 +107,8 @@ def list_tracks(d):
     return out
 @app.route('/')
 def index():
-    return render_template('index.html',suites=[{"id":s["id"],"label":s["label"],"type":s["type"]} for s in suites()])
+    return render_template('index.html',suites=[{"id":s["id"],"label":s["label"],"type":s["type"],
+                                                 "video":s["video"]} for s in suites()])
 @app.route('/api/suite/<path:sid>')
 def suite(sid):
     s=smap().get(sid); return jsonify(list_tracks(s["_dir"]) if s else [])
@@ -124,6 +160,72 @@ def media(sid, base):
             return send_file(str(p), mimetype=('video/mp4' if ext=='.mp4' else 'audio/mpeg'), conditional=True)
     abort(404)
 
+@app.route('/frame/<sid>/<base>')
+def frame(sid, base):
+    """One JPEG of the video at ?t= seconds — nothing else crosses the network.
+
+    The point is the phone: letting the browser load the .mp4 and seek would pull
+    the moov atom plus segments around the seek point (megabytes over cellular)
+    and burn battery decoding video, all to look at a single still. ffmpeg seeks
+    server-side and sends ~20KB instead."""
+    s=smap().get(sid)
+    if not s or not re.fullmatch(r'[A-Za-z0-9_\-]+', base or ''): abort(404)
+    if not FFMPEG: abort(503)
+    try: t=max(0.0,float(request.args.get('t','0')))
+    except ValueError: t=0.0
+    w=request.args.get('w','640')
+    w=max(160,min(1280,int(w))) if re.fullmatch(r'\d{2,4}',w or '') else 640
+    for ext in ('.mp4','.m4v','.mov'):
+        p=Path(s["_dir"])/(base+ext)
+        if p.is_file(): break
+    else: abort(404)
+    # -ss before -i = input seeking (fast, keyframe-accurate enough for a glance)
+    cmd=[FFMPEG,"-v","error","-ss",f"{t:.3f}","-i",str(p),"-frames:v","1",
+         "-vf",f"scale={w}:-2","-q:v","8","-f","mjpeg","pipe:1"]
+    try: r=subprocess.run(cmd,capture_output=True,timeout=20)
+    except subprocess.TimeoutExpired: abort(504)
+    if r.returncode!=0 or not r.stdout: abort(500)
+    return Response(r.stdout,mimetype='image/jpeg',
+                    headers={"Cache-Control":"public, max-age=86400"})
+
+CLIPDIR="/tmp/clipcache"
+@app.route('/clip/<sid>/<base>')
+def clip(sid, base):
+    """A few seconds of video around ?t=, re-encoded small — the middle ground
+    between one still and streaming the whole .mp4.
+
+    Measured on a Peppa episode: 3s at 480px with a 64k mono track is ~74KB and
+    takes ffmpeg ~0.23s, against ~26KB for a single 640px JPEG and ~240KB for the
+    same 3s taken with -c copy (which must start at the previous keyframe and
+    carries the original bitrate). Keeps the audio: the overlay pauses the local
+    mp3, so a silent clip would just be silence."""
+    s=smap().get(sid)
+    if not s or not re.fullmatch(r'[A-Za-z0-9_\-]+', base or ''): abort(404)
+    if not FFMPEG: abort(503)
+    try: t=max(0.0,float(request.args.get('t','0')))
+    except ValueError: t=0.0
+    try: dur=min(10.0,max(1.0,float(request.args.get('dur','3'))))
+    except ValueError: dur=3.0
+    w=request.args.get('w','480')
+    w=max(240,min(640,int(w))) if re.fullmatch(r'\d{2,4}',w or '') else 480
+    for ext in ('.mp4','.m4v','.mov'):
+        p=Path(s["_dir"])/(base+ext)
+        if p.is_file(): break
+    else: abort(404)
+    # a little lead-in so the first phoneme of the line is not clipped
+    ss=max(0.0,t-0.3)
+    os.makedirs(CLIPDIR,exist_ok=True)
+    out=os.path.join(CLIPDIR,f"{sid}_{base}_{ss:.2f}_{dur:.1f}_{w}.mp4")
+    if not os.path.exists(out):
+        cmd=[FFMPEG,"-v","error","-y","-ss",f"{ss:.3f}","-t",f"{dur:.3f}","-i",str(p),
+             "-vf",f"scale={w}:-2","-b:v","250k" if w<=480 else "400k",
+             "-c:a","aac","-b:a","64k","-ac","1","-movflags","+faststart",out]
+        try: r=subprocess.run(cmd,capture_output=True,timeout=60)
+        except subprocess.TimeoutExpired: abort(504)
+        if r.returncode!=0 or not os.path.exists(out) or os.path.getsize(out)==0: abort(500)
+    return send_file(out,mimetype="video/mp4",conditional=True,
+                     max_age=86400)
+
 @app.route('/api/models')
 def api_models():
     return jsonify(models=[m["name"] for m in MODELS], default=(MODELS[0]["name"] if MODELS else ""))
@@ -143,7 +245,11 @@ def interpret():
     user=((f"【出处】{title}\n" if title else "")+
           (f"【上下文（同一段歌词）】\n{context}\n\n" if context else "")+
           f"【选中】{text}\n\n请讲解【选中】的部分。")
-    messages=[{"role":"system","content":SYS_PROMPT}]
+    sysmsg=SYS_PROMPT
+    if _is_single_word(text):
+        # appended last so it wins over SYS_PROMPT's "简单常见的词只用一句话、不展开"
+        sysmsg=SYS_PROMPT+"\n\n"+SINGLE_WORD_RULE
+    messages=[{"role":"system","content":sysmsg}]
     for h in history:
         if isinstance(h,dict) and h.get('role') in ('user','assistant') and h.get('content'):
             messages.append({"role":h['role'],"content":str(h['content'])})

@@ -108,7 +108,8 @@
       background: var(--bg); margin-top: 14px; padding: 2px 0; }
     #play-row #audio, #play-row #apl { flex: 1 1 auto; min-width: 0; margin: 0; }
     /* keep these compact so the media control still has room for its timeline + times */
-    #play-row #edit-toggle, #play-row #go-top, #play-row #go-current, #play-row #copy-all, #play-row #fs-btn {
+    #play-row #edit-toggle, #play-row #go-top, #play-row #go-current, #play-row #copy-all, #play-row #fs-btn,
+    #play-row #frame-btn {
       flex: 0 0 auto; font-size: 13px; padding: 4px 5px; line-height: 1; }
 
     /* Lyrics box toolbar (edit toggle + save/cancel). */
@@ -286,6 +287,18 @@
   body.video-mode.playing #rpane { flex:1 1 auto; min-height:0; overflow-y:auto; padding:4px 10px; }
   #fs-btn { display:none; }
   body.video-mode.playing #fs-btn { display:inline-flex; }
+  /* 🖼 画面浮层 */
+  #frame-overlay { display:none; position:fixed; inset:0; z-index:9998; background:rgba(0,0,0,.88);
+    align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:12px; }
+  #frame-overlay.open { display:flex; }
+  #frame-overlay #frame-img, #frame-overlay #frame-clip { max-width:100%; max-height:78vh; border-radius:10px; background:#000; }
+  #frame-overlay #frame-cap { color:#eee; font-size:13px; text-align:center; opacity:.85; }
+  #frame-overlay #frame-close { position:absolute; right:12px; width:44px; height:44px;
+    top:calc(10px + env(safe-area-inset-top,0px));   /* clear the notch / status bar */
+    display:flex; align-items:center; justify-content:center;
+    border:0; border-radius:50%; cursor:pointer; padding:0;
+    background:rgba(255,255,255,.20); color:#fff; font-size:20px; line-height:1; }
+  #frame-overlay #frame-close:active { background:rgba(255,255,255,.34); }
   /* fake landscape fullscreen — rotate video to landscape when device is portrait
      (works on iOS/Android/desktop; screen.orientation.lock is unreliable) */
   #fs-exit { display:none; }
@@ -341,11 +354,20 @@
 <div id="trackList"></div>
 <button id="fs-exit" type="button">✕ 退出全屏</button>
 
+<!-- 🖼 当前时刻的视频画面（音频合集借用 video 孪生合集） -->
+<div id="frame-overlay">
+  <button id="frame-close" type="button" title="关闭" aria-label="关闭">✕</button>
+  <img id="frame-img" alt="当前时刻画面">
+  <video id="frame-clip" controls playsinline preload="auto" style="display:none"></video>
+  <div id="frame-cap"></div>
+</div>
+
 <div id="stage">
 <div id="play-row">
   <video id="audio" controls playsinline preload="metadata"></video>
   <audio id="apl" controls preload="metadata"></audio>
   <button id="fs-btn" class="tool-btn" type="button" title="全屏(横屏)" aria-label="全屏">⛶ 全屏</button>
+  <button id="frame-btn" class="tool-btn" type="button" style="display:none" title="看一眼此刻的视频画面" aria-label="看画面">🖼</button>
   <button id="edit-toggle" class="tool-btn" type="button" disabled title="编辑歌词" aria-label="编辑歌词">✏️</button>
   <button id="go-top" class="tool-btn" type="button" title="返回列表" aria-label="返回列表">↑</button>
   <button id="go-current" class="tool-btn" type="button" title="跳到当前播放句并恢复滚动" aria-label="跳到当前播放句">📍</button>
@@ -532,6 +554,7 @@ function play(track, btn) {
   lyrics = parseLyrics(track.lyrics || '');
   editToggle.disabled = false;
   displayLyrics();
+  updateFrameBtn();
 }
 
 function parseLyrics(text) {
@@ -1076,6 +1099,79 @@ document.getElementById('type-toggle').onclick=()=>{
   ftype = (ftype==='video') ? 'audio' : 'video';
   localStorage.setItem('ftype',ftype); applyFilter();
 };
+/* ---- 🖼 看一眼此刻的视频画面 ----
+ * 音频合集若有 video 孪生合集（app.py 给出 s.video），就从孪生合集里同名曲目取当前
+ * 播放时刻的一帧。两边时间轴对齐（实测 mp3/mp4 时长相差 <0.05s），所以直接用
+ * audio.currentTime。显示的是 seek 后暂停的 <video> 原生帧, 不走 canvas —— iOS
+ * Safari 从 video 画到 canvas 限制很多, 原生帧可靠得多。
+ * 刻意不暂停音频: 这个功能就是"瞥一眼"。*/
+const frameBtn=document.getElementById('frame-btn');
+const frameOv=document.getElementById('frame-overlay');
+const frameImg=document.getElementById('frame-img');
+const frameCap=document.getElementById('frame-cap');
+const frameClose=document.getElementById('frame-close');
+const frameClip=document.getElementById('frame-clip');
+function videoTwin(id){ const x=SUITES.find(s=>s.id===id); return (x&&x.video)||null; }
+function updateFrameBtn(){
+  if(!frameBtn) return;
+  frameBtn.style.display=(currentTrack&&videoTwin(currentSuite))?'':'none';
+}
+function fmtClock(t){ const m=Math.floor(t/60),s=Math.floor(t%60); return m+':'+String(s).padStart(2,'0'); }
+// Looking at a frame stops playback and closing it resumes — same contract as the
+// 解读 drawer, so the two never fight over who owns the play state.
+let _frameWasPlaying=false;
+function closeFrame(){
+  if(!frameOv||!frameOv.classList.contains('open')) return;
+  frameOv.classList.remove('open');
+  if(frameClip){ try{ frameClip.pause(); }catch(_){} frameClip.removeAttribute('src'); frameClip.load(); }
+  if(_frameWasPlaying && !editMode) audio.play().catch(()=>{});
+  _frameWasPlaying=false;
+}
+function showFrame(atTime){
+  const vid=videoTwin(currentSuite);
+  if(!vid||!currentTrack) return;
+  // quantise to 0.5s: imperceptible for a glance, and a second tap at the same
+  // moment is then a browser cache hit instead of another request
+  const t=Math.round((atTime!=null?atTime:(audio.currentTime||0))*2)/2;
+  _frameWasPlaying=!audio.paused; audio.pause();
+  // native video is 640 wide; asking for more would only pad the payload
+  const w=Math.min(640,Math.max(320,Math.round(window.innerWidth*(window.devicePixelRatio||1))));
+  frameCap.textContent='取帧中… '+fmtClock(t);
+  frameImg.style.display=''; if(frameClip) frameClip.style.display='none';
+  frameOv.classList.add('open');
+  frameImg.onload=()=>{ frameCap.textContent=fmtClock(t)+'  ·  '+(currentTrack.name||'')+'  ·  点 ✕ 或图外关闭'; };
+  frameImg.onerror=()=>{ frameCap.textContent='取帧失败（服务器缺 ffmpeg 或找不到视频）'; };
+  frameImg.src='/frame/'+encodeURIComponent(vid)+'/'+encodeURIComponent(currentTrack.name)
+              +'?t='+t.toFixed(2)+'&w='+w;
+}
+// 🎬 a few seconds of video instead of one still. Same pause/resume contract as
+// 🖼; the clip carries its own audio, so the local mp3 stays paused underneath.
+function showClip(atTime){
+  const vid=videoTwin(currentSuite);
+  if(!vid||!currentTrack||!frameClip) return;
+  const t=Math.round((atTime!=null?atTime:(audio.currentTime||0))*2)/2;
+  _frameWasPlaying=!audio.paused; audio.pause();
+  frameCap.textContent='取片段中… '+fmtClock(t);
+  frameImg.style.display='none'; frameClip.style.display='';
+  frameOv.classList.add('open');
+  frameClip.onloadeddata=()=>{ frameCap.textContent=fmtClock(t)+'  ·  3 秒片段  ·  点 ✕ 或图外关闭'; };
+  frameClip.onerror=()=>{ frameCap.textContent='取片段失败'; };
+  frameClip.src='/clip/'+encodeURIComponent(vid)+'/'+encodeURIComponent(currentTrack.name)
+              +'?t='+t.toFixed(2)+'&dur=3&w=480';
+  frameClip.play().catch(()=>{});
+}
+frameBtn&&frameBtn.addEventListener('click',()=>showFrame());
+// the widget asks this per-selection before drawing its 🖼 button
+window.INTERPRET_FRAME_OK=()=>!!(currentTrack&&videoTwin(currentSuite));
+// ✕ and the backdrop close it; a tap on the image itself must NOT, so you can
+// look at (or pinch) the frame without dismissing it by accident
+frameClose&&frameClose.addEventListener('click',e=>{ e.stopPropagation(); closeFrame(); });
+frameImg&&frameImg.addEventListener('click',e=>e.stopPropagation());
+frameClip&&frameClip.addEventListener('click',e=>e.stopPropagation());
+frameOv&&frameOv.addEventListener('click',closeFrame);
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&frameOv&&frameOv.classList.contains('open')) closeFrame();
+});
 suiteSelect.addEventListener('change',()=>loadSuite(suiteSelect.value));
 async function loadSuite(id){
   if(editMode) exitEdit(true);
@@ -1087,6 +1183,7 @@ async function loadSuite(id){
   try{const r=await fetch('/api/suite/'+encodeURIComponent(id));TRACKS=await r.json();}catch(e){TRACKS=[];}
   renderTrackList();
   updateStatus();
+  updateFrameBtn();
 }
 /* ---- 本地音频持久化: 选一次长期缓存, 离线可用, 免重选 ---- */
 const cacheInfo=document.getElementById('cache-info');
@@ -1218,7 +1315,7 @@ applyMode();
 
 <!-- ✨ 选中歌词 → LLM 讲解 -->
 <script>window.INTERPRET_BASE='';</script>
-<script src="/static/interpret-widget.js?v=20260812b"></script>
+<script src="/static/interpret-widget.js?v=20260905b"></script>
 <script>
 (function(){
   const lyricsDiv=document.getElementById('lyrics');
@@ -1231,8 +1328,10 @@ applyMode();
   // Enough to resolve pronouns / "that", without shipping the whole transcript on every
   // turn: it used to send the entire episode (~2.2k chars for Peppa, ~3k for forrest_gump),
   // and the widget re-sends payload.context on EVERY follow-up. A ±5 window is ~12% of that.
+  let _selLineTime=null;      // timestamp of the line the user selected (for 🖼)
   const CTX_LINES=5;   // 选中行前后各 5 句 → 连选中行共 11 句
   function buildCtx(r){
+    _selLineTime=null;
     if(typeof lyrics==='undefined'||!lyrics.length) return {context:r.toString().trim(),parts:null};
     const strip=(typeof stripMark==='function')?stripMark:(s=>s);
     const rows=Array.prototype.filter.call(lyricsDiv.querySelectorAll('.line'),
@@ -1241,6 +1340,9 @@ applyMode();
     const i0=+rows[0].dataset.index, i1=+rows[rows.length-1].dataset.index;
     const lo=Math.max(0,i0-CTX_LINES), hi=Math.min(lyrics.length-1,i1+CTX_LINES);
     const context=lyrics.slice(lo,hi+1).map(l=>strip(l.text)).join('\n');
+    // remember when the selected line is spoken, so 🖼 can show THAT moment rather
+    // than wherever playback happens to be
+    _selLineTime=(lyrics[i0]&&lyrics[i0].time!=null)?lyrics[i0].time:null;
     // Single-line selection: hand the drawer exact in-line offsets, so 原句 highlights the
     // occurrence you actually picked. (The indexOf fallback marks the FIRST match in the
     // context, which lands on the wrong line for a repeated word.)
@@ -1303,6 +1405,16 @@ applyMode();
     // drawer opened before editing must not restart it behind the editor's back.
     _drawerOpen=false; if(_drawerWasPlaying && !editMode) audio.play().catch(()=>{});
     _drawerWasPlaying=false;
+  });
+  // 🖼 on the popup: show the frame for the SELECTED line's moment. popuphide fired
+  // just before this and resumed playback; showFrame pauses again in the same task.
+  document.addEventListener('interpret:frame',()=>{
+    _selShown=false;
+    if(typeof showFrame==='function') showFrame(_selLineTime);
+  });
+  document.addEventListener('interpret:clip',()=>{
+    _selShown=false;
+    if(typeof showClip==='function') showClip(_selLineTime);
   });
   // ▶ on the popup: force playback (replay) regardless of prior state
   document.addEventListener('interpret:play',()=>{ _selShown=false; audio.play().catch(()=>{}); });

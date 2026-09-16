@@ -2,6 +2,14 @@ import glob,re,os,sys,subprocess
 SRC=sys.argv[1] if len(sys.argv)>1 else "peppa_lyrics"     # dir of <name>.mp3 + <name>.txt
 OUT=sys.argv[2] if len(sys.argv)>2 else "peppa_trimmed"; os.makedirs(OUT,exist_ok=True)
 INTRO={"im peppa pig","this is my little brother george","this is mummy pig","and this is daddy pig","peppa pig"}
+# Whisper does not always render the ~22s intro as those exact separate lines: over the
+# theme music it may merge them into one line, or hallucinate the whole chunk into a
+# single unrelated phrase ("The End" is by far the most common). Exact set membership
+# missed both, so `a` stayed 0, the head went untrimmed, and the junk line survived at
+# the top of the transcript — and because Whisper decodes in 30s windows, the episode
+# title and first narration line (spoken ~22-30s) were lost with it.
+HALLUC={"the end","thank you","thanks for watching","subtitles by the amaraorg community"}
+INTRO_MAX=25.0     # the intro never runs past this, so only look for junk before it
 JINGLE={"peppa pig","papa pig"}
 PAD=0.15
 def norm(t): return re.sub(r"[^a-z0-9 ]","",t.lower()).strip()
@@ -22,8 +30,17 @@ for i,mp3 in enumerate(mp3s,1):
     if not os.path.exists(txt): continue
     L=parse(txt)
     if not L: continue
+    def is_intro(t,txt):
+        n=norm(txt)
+        if not n: return True
+        if n in INTRO: return True
+        if t>=INTRO_MAX: return False          # past the intro nothing here is junk
+        if n in HALLUC: return True
+        r=n                                    # merged intro: peel off every known phrase
+        for ph in sorted(INTRO|HALLUC,key=len,reverse=True): r=r.replace(ph,"")
+        return not r.strip()
     a=0
-    while a<len(L) and norm(L[a][1]) in INTRO: a+=1
+    while a<len(L) and is_intro(*L[a]): a+=1
     b=len(L)
     while b>0 and norm(L[b-1][1]) in JINGLE: b-=1
     if b<=a:
@@ -40,5 +57,6 @@ for i,mp3 in enumerate(mp3s,1):
     subprocess.run(cmd,check=True)
     if a>0: trimmed_h+=1
     if tail_cut is not None: trimmed_t+=1
-    print(f"[{i}/{n}] {base}  头-{a}行@{head_cut:.0f}s 尾-{len(L)-b}行  留{len(kept)}行",flush=True)
+    warn=" WARN 裁后首行仍偏晚, 片头可能没识别干净" if kept[0][0]-astart>5 else ""
+    print(f"[{i}/{n}] {base}  头-{a}行@{head_cut:.0f}s 尾-{len(L)-b}行  留{len(kept)}行{warn}",flush=True)
 print(f"TRIM_DONE  裁头 {trimmed_h}, 裁尾 {trimmed_t}, 跳过 {skip}, 共 {n}")
