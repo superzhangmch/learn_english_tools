@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>生词本</title>
+<link rel="icon" href="/static/favicon.ico?v={{V}}" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png?v={{V}}">
+<link rel="apple-touch-icon" href="/static/icon-180.png?v={{V}}">
+
 <style>
 :root{
   --bg:#fbfaf7; --panel:#fff; --ink:#1a1a1a; --ink-soft:#6b6b6b; --ink-faint:#a8a49c;
@@ -22,8 +26,9 @@ header{position:sticky;top:0;display:flex;align-items:center;gap:10px;padding:12
 header h1{font-size:16px;margin:0;font-weight:700}
 header .n{color:var(--ink-faint);font-size:13px}
 header .sp{flex:1}
-header a,header button{font:inherit;font-size:13px;color:var(--ink);background:none;
+header a,header button,header select{font:inherit;font-size:13px;color:var(--ink);background:none;
   border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer;text-decoration:none}
+.card .bk{font-size:11.5px;color:var(--accent);margin-right:6px}
 header button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 main{max-width:44em;margin:0 auto;padding:14px 16px 60px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -50,15 +55,17 @@ main{max-width:44em;margin:0 auto;padding:14px 16px 60px}
 <header>
   <h1>📓 生词本</h1><span class="n" id="count"></span>
   <span class="sp"></span>
+  <select id="fBook"><option value="">全部书</option></select>
   <button id="fWords">只看词/短语</button>
   <button id="fold">折叠</button>
-  <a href="/read">← 回到阅读</a>
+  <a href="/">← 书架</a>
 </header>
 <main><div id="list" class="status">载入中…</div></main>
 
 <script>
 const $ = (s) => document.querySelector(s);
-let items = [], wordsOnly = false, folded = false;
+let items = [], wordsOnly = false, folded = false, bookFilter = '';
+let TITLES = {};        // book id -> title, so an entry says where it came from
 
 document.documentElement.dataset.theme = localStorage.getItem('nrw_theme') ||
   (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -99,7 +106,8 @@ function sentenceHtml(it){
 
 function render(){
   const list = $('#list');
-  const shown = wordsOnly ? items.filter(i => i.text.length <= 40) : items;
+  let shown = wordsOnly ? items.filter(i => i.text.length <= 40) : items;
+  if (bookFilter) shown = shown.filter(i => i.book === bookFilter);
   $('#count').textContent = shown.length + ' 条';
   if (!shown.length) {
     list.className = 'status';
@@ -112,7 +120,7 @@ function render(){
       <div class="top">
         <span class="term">${esc(it.text.length > 60 ? it.text.slice(0, 60) + '…' : it.text)}</span>
         <span class="tag">${esc(MODE_LABEL[it.mode] || it.mode)}</span>
-        <span class="where">${esc(it.chapter_title || '')}${it.page ? ' · p.' + esc(it.page) : ''}</span>
+        <span class="where"><span class="bk">${esc(TITLES[it.book] || '')}</span>${esc(it.chapter_title || '')}${it.page ? ' · p.' + esc(it.page) : ''}</span>
         <button class="del" title="删除">×</button>
       </div>
       <div class="sent">${sentenceHtml(it)}</div>
@@ -128,11 +136,17 @@ function render(){
     e.target.closest('.card').classList.toggle('collapsed'));
 }
 
+$('#fBook').onchange = (e) => { bookFilter = e.target.value; render(); };
 $('#fWords').onclick = (e) => { wordsOnly = !wordsOnly; e.target.classList.toggle('on', wordsOnly); render(); };
 $('#fold').onclick = (e) => { folded = !folded; e.target.classList.toggle('on', folded); render(); };
 
 (async function(){
   try {
+    const shelf = (await (await fetch('/api/books')).json()).books || [];
+    TITLES = Object.fromEntries(shelf.map(b => [b.id, b.title]));
+    const sel = $('#fBook');
+    shelf.forEach(b => sel.insertAdjacentHTML('beforeend',
+      `<option value="${esc(b.id)}">${esc(b.title.slice(0, 40))}</option>`));
     items = (await (await fetch('/api/vocab?limit=1000')).json()).items || [];
   } catch (e) {
     $('#list').innerHTML = '载入失败：' + esc(e.message);

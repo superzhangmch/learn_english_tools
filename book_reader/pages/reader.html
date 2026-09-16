@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
 <title>Book Reader</title>
+<link rel="icon" href="/static/favicon.ico?v={{V}}" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png?v={{V}}">
+<link rel="apple-touch-icon" href="/static/icon-180.png?v={{V}}">
+
 <style>
 :root{
   --bg:#fbfaf7; --panel:#fff; --ink:#1a1a1a; --ink-soft:#6b6b6b; --ink-faint:#a8a49c;
@@ -38,8 +42,12 @@ header .bk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:3
 header .ch{font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header button{font-family:inherit;font-size:13px;background:none;border:1px solid var(--line);
   border-radius:7px;padding:5px 9px;color:var(--ink);cursor:pointer;white-space:nowrap}
-header button.icon{border:none;font-size:19px;padding:2px 6px;line-height:1}
+header button.icon,header a.icon{border:none;font-size:19px;padding:2px 6px;line-height:1;
+  color:var(--ink);text-decoration:none;background:none;cursor:pointer;font-family:inherit}
 header button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+/* 书架和目录都是导航键，挨着放很容易误触，所以放在两端，
+   并且和相邻的 ⚙ 之间也留一道分隔 */
+header #homeBtn{margin-left:4px;padding-left:11px;border-left:1px solid var(--line)}
 @media (max-width:640px){ header .bk{display:none} header button{padding:5px 7px} }
 
 footer{position:fixed;bottom:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:12px;
@@ -119,7 +127,7 @@ main{max-width:var(--measure);margin:0 auto;padding:64px 20px 84px;font-size:var
 </style>
 
 <!-- the book styling its own classes; filtered + scoped server-side -->
-<link rel="stylesheet" href="/api/book.css">
+<link rel="stylesheet" id="bookCss">
 
 <style>
 /* ---------- overrides that must win over the book's stylesheet ---------- */
@@ -174,6 +182,17 @@ main{max-width:var(--measure);margin:0 auto;padding:64px 20px 84px;font-size:var
 #article>:first-child .pgmark:first-child,
 #article>.pgmark:first-child{display:none}
 
+/* the glossary hit, rendered locally in the drawer */
+#nrw-drawer .gl-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+#nrw-drawer .gl-head b{font-family:var(--serif);font-size:1.25em}
+#nrw-drawer .gl-ipa{color:var(--ink-soft);font-size:.86em}
+#nrw-drawer .gl-kind{font-size:.72em;color:var(--ink-soft);border:1px solid var(--line);
+  border-radius:1em;padding:0 .5em}
+#nrw-drawer .gl-via{font-size:.75em;color:var(--ink-faint)}
+#nrw-drawer .gl-zh{font-size:1.35em;font-weight:700;margin:.35em 0 .3em}
+#nrw-drawer .gl-note{line-height:1.65}
+#nrw-drawer .gl-n,#nrw-drawer .gl-miss{margin-top:.7em;font-size:.8em;color:var(--ink-faint);line-height:1.5}
+
 .status{padding:3em 0;text-align:center;color:var(--ink-soft);font-family:var(--sans);font-size:14px}
 .status.err{color:#c0392b}
 @media (max-width:640px){ main{padding:58px 16px 78px} }
@@ -187,6 +206,7 @@ main{max-width:var(--measure);margin:0 auto;padding:64px 20px 84px;font-size:var
   <span class="ch" id="chTitle"></span>
   <button id="askBtn" title="把当前页附近的原文交给模型，你自己提问">提问</button>
   <button class="icon nrw-gear" id="gear" title="设置">⚙</button>
+  <a class="icon" id="homeBtn" href="/" title="书架">⌂</a>
 </header>
 
 <!-- moved into the interpret drawer on load, so the question and every follow-up
@@ -217,12 +237,26 @@ main{max-width:var(--measure);margin:0 auto;padding:64px 20px 84px;font-size:var
 <div id="trafficPanel"></div>
 <div class="bar" id="bar" style="width:0"></div>
 
-<script src="/static/interpret-widget.js"></script>
+<script>
+// 查 is only offered for a book that actually has a glossary — a button that
+// always answers "本书没有词表" is worse than no button. Whether this book has
+// one is not known until /api/books/{id} lands, so the mode is registered then,
+// not here; the bubble rebuilds its buttons each time it opens.
+window.INTERPRET_TITLES = { dict: '查 · 本书专名' };
+window.INTERPRET_MODES = [{ m: 'interpret', label: '✨ 解读' },
+                          { m: 'grammar', label: '语法' },
+                          { m: 'background', label: '背景' }];
+</script>
+<script src="/static/interpret-widget.js?v={{V}}"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const article = $('#article');
 
-let BOOK = null;            // /api/book payload
+// which book this page is reading; every API path below hangs off it
+const BOOK_ID = new URLSearchParams(location.search).get('b') || '';
+const API = '/api/books/' + encodeURIComponent(BOOK_ID);
+
+let BOOK = null;            // /api/books/{id} payload
 let CHAPTER = null;         // /api/chapter/{n} payload
 let PAGES = [];             // flat printed-page index across the whole book
 let pageAt = new Map();     // "pg-4" -> position in PAGES
@@ -234,8 +268,9 @@ const chapterCache = new Map();
 
 // ---------- boot ----------
 (async function init(){
+  if (!BOOK_ID) { location.replace('/'); return; }
   try {
-    BOOK = await (await fetch('/api/book')).json();
+    BOOK = await (await fetch(API)).json();
   } catch (e) {
     article.innerHTML = '<div class="status err">载不到书：' + esc(e.message) + '</div>';
     return;
@@ -246,13 +281,14 @@ const chapterCache = new Map();
   document.title = BOOK.title;
   // hyphenation and quotes are language-dependent; take the book's own metadata
   if (BOOK.language) article.lang = BOOK.language;
+  if (BOOK.glossary > 0) enableGlossary();
   buildToc();
 
   // route: #/c/9/anchor  >  saved progress  >  first chapter with text
   const r = parseHash();
   if (r) return loadChapter(r.idx, r.anchor);
   let saved = null;
-  try { saved = await (await fetch('/api/progress')).json(); } catch (_) {}
+  try { saved = await (await fetch('/api/progress?book=' + encodeURIComponent(BOOK_ID))).json(); } catch (_) {}
   if (saved && Number.isInteger(saved.chapter)) return loadChapter(saved.chapter, saved.anchor);
   loadChapter(0);
 })();
@@ -265,6 +301,36 @@ window.addEventListener('hashchange', () => {
   const r = parseHash();
   if (r && (!CHAPTER || r.idx !== CHAPTER.idx || r.anchor)) loadChapter(r.idx, r.anchor);
 });
+
+// ---------- the book's own glossary ----------
+// Answered locally: no round trip, no tokens. A name you half-remember should
+// cost nothing to check, or you weigh whether it is worth interrupting the page.
+function enableGlossary(){
+  if (!window.Interpret || !Interpret.setModes) return;
+  Interpret.setModes(
+    [{ m: 'interpret', label: '✨ 解读' }, { m: 'dict', label: '查' },
+     { m: 'grammar', label: '语法' }, { m: 'background', label: '背景' }],
+    { dict: lookupTerm });
+}
+
+async function lookupTerm(payload){
+  const q = (payload.text || '').trim();
+  const d = await (await fetch(API + '/dict?word=' + encodeURIComponent(q))).json();
+  if (!d.found) {
+    return `<p><b>${esc(q)}</b> 不在本书词表里。</p>` +
+      `<p class="gl-miss">本书词表收了 ${d.glossary} 个专名（正文中出现较多的人名、神名、地名、` +
+      `族名）。这个词可能出现太少，或者本就不是专名 —— 用「✨ 解读」问模型。</p>`;
+  }
+  const via = d.via && d.via.toLowerCase() !== q.toLowerCase()
+    ? `<span class="gl-via">经由 ${esc(d.via)}</span>` : '';
+  return `<div class="gl-hit">
+    <div class="gl-head"><b>${esc(d.term)}</b><span class="gl-ipa">${esc(d.ipa)}</span>
+      <span class="gl-kind">${esc(d.kind)}</span>${via}</div>
+    <div class="gl-zh">${esc(d.zh)}</div>
+    <div class="gl-note">${esc(d.note)}</div>
+    <div class="gl-n">全书出现 ${d.n} 次 · 完整对照表见书末附录</div>
+  </div>`;
+}
 
 // ---------- table of contents ----------
 function buildToc(){
@@ -315,7 +381,7 @@ async function loadChapter(idx, anchor){
   } else {
     article.innerHTML = '<div class="status">载入中…</div>';
     try {
-      const r = await fetch('/api/chapter/' + idx);
+      const r = await fetch(API + '/chapter/' + idx);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       CHAPTER = await r.json();
       chapterCache.set(idx, CHAPTER);
@@ -513,7 +579,8 @@ function saveProgress(){
     const m = currentMark();
     fetch('/api/progress', {
       method: 'PUT', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ chapter: CHAPTER.idx, anchor: m ? m.id : '', page: m ? m.dataset.page : '' }),
+      body: JSON.stringify({ book: BOOK_ID, chapter: CHAPTER.idx,
+                             anchor: m ? m.id : '', page: m ? m.dataset.page : '' }),
     }).catch(() => {});
   }, 1200);
 }
@@ -540,7 +607,7 @@ function askRange(){
 async function askRangeMeta(range){
   const qs = new URLSearchParams(range).toString();
   try {
-    return await (await fetch('/api/passage?' + qs)).json();
+    return await (await fetch(API + '/passage?' + qs)).json();
   } catch (e) {
     return { chars: 0, label: '范围读取失败：' + e.message };
   }
@@ -571,7 +638,8 @@ async function refreshAskRange(){
     : (meta.label || '这个范围里没有正文');
   $('#askRange').textContent = desc;
   // patch the live session, so widening the window applies from the next turn on
-  if (window.Interpret) Interpret.update({ extra: range, ctxLabel: '模型看到 ' + desc });
+  if (window.Interpret)
+    Interpret.update({ extra: { ...range, book_id: BOOK_ID }, ctxLabel: '模型看到 ' + desc });
   return meta;
 }
 $('#askBack').onchange = refreshAskRange;
@@ -589,7 +657,7 @@ async function openAsk(){
   // no question yet: the drawer opens and waits for it, so the first question
   // and every follow-up go through the same box
   Interpret.open({
-    extra: range, awaitQuestion: true, noMarker: true,
+    extra: { ...range, book_id: BOOK_ID }, awaitQuestion: true, noMarker: true,
     inputHint: '问这几页… （回车发送）',
     ctxLabel: '模型看到 ' + desc,
     book: BOOK.title, author: BOOK.author,
@@ -669,7 +737,7 @@ function handleSelect(e){
     const parts = buildContext(sel);
     const m = currentMark();
     Interpret.popupAt(rect, {
-      text, context: parts.ctx, parts,
+      text, context: parts.ctx, parts, extra: { book_id: BOOK_ID },
       book: BOOK ? BOOK.title : '', author: BOOK ? BOOK.author : '',
       chapter: CHAPTER ? CHAPTER.idx : -1,
       chapter_title: CHAPTER ? chapterName(CHAPTER.idx) : '',
@@ -790,6 +858,9 @@ function ensureFontGroup(){
   grp.querySelectorAll('.bf').forEach(b => b.onclick = () => applyFont(b.dataset.f));
   markFont();
 }
+
+// the book's own stylesheet, resolved once the book id is known
+document.getElementById('bookCss').href = API + '/book.css';
 
 (function applySaved(){
   const t = localStorage.getItem('nrw_theme');

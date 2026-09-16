@@ -53,10 +53,51 @@ ALLOWED_ATTRS = {"id", "class", "href", "src", "alt", "colspan", "rowspan",
 # when the reader clicks it. Reading over a phone/tunnel, the figures are most of
 # the bytes in a chapter, and most of the time you are reading the prose.
 THUMB_WIDTH = 96
+# An image appearing in this many spine documents is furniture — a colophon
+# logo, a section ornament — not a plate. Publishers differ in everything else,
+# but nobody reprints the same illustration in a dozen chapters.
+REPEAT_IS_DECORATION = 3
+# …and something this small is furniture however often it appears.
+DECORATION_AREA = 10_000
 # Matched to the width the cover is actually displayed at. Set larger than the
 # source image (covers here are ~476 px wide) and the "thumbnail" is the original
 # re-encoded — no saving at all, which is how this came to cost 79 KB.
 COVER_WIDTH = 320
+
+# Content documents in an epub are required to be UTF-8 (or UTF-16 with a BOM).
+# Many carry no declaration at all, and libxml2's HTML parser then guesses —
+# wrongly, turning every em dash into "â€“". So the bytes are decoded here, by
+# the rules the format actually guarantees, before any parser sees them.
+CHARSET_RE = re.compile(rb"""(?:encoding|charset)\s*=\s*["']?\s*([\w-]+)""", re.I)
+# lxml refuses a str that still carries an encoding declaration, and once the
+# bytes are decoded the declaration has no job left to do
+XML_DECL_RE = re.compile(r"^\s*<\?xml[^>]*\?>\s*", re.I)
+
+
+def decode_html(raw: bytes) -> str:
+    """Text of an epub content document, decoded the way the spec promises."""
+    return XML_DECL_RE.sub("", _decode(raw), count=1)
+
+
+def _decode(raw: bytes) -> str:
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    m = CHARSET_RE.search(raw[:1024])            # honour an explicit declaration
+    if m:
+        try:
+            declared = m.group(1).decode("ascii").lower()
+            if declared not in ("utf-8", "utf8"):
+                return raw.decode(declared)
+        except (LookupError, UnicodeDecodeError):
+            pass
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # not valid UTF-8 despite the requirement: keep the readable majority
+        return raw.decode("utf-8", "replace")
+
 
 # Block elements that force a paragraph break when extracting plain text.
 TEXT_BLOCKS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
@@ -104,8 +145,11 @@ class Chapter:
 class Epub:
     """A parsed epub, served from an open zip handle."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, res_prefix: str = "/api/res"):
         self.path = path
+        # every resource URL this book emits is built from here, so several
+        # books can be served side by side without their images colliding
+        self.res_prefix = res_prefix.rstrip("/")
         self.zf = zipfile.ZipFile(path)
         self._names = set(self.zf.namelist())
 
@@ -139,6 +183,8 @@ class Epub:
 
         self._cache: dict[int, Chapter] = {}
         self._pages: list | None = None
+        self._sizes: dict[str, tuple | None] = {}
+        self._decorative: set | None = None
 
     # ---------- package files ----------
 
@@ -322,7 +368,7 @@ class Epub:
         nav = next((i["href"] for i in manifest.values() if "nav" in i["properties"]), None)
         if not nav or nav not in self._names:
             return []
-        doc = lhtml.fromstring(self.zf.read(nav))
+        doc = lhtml.fromstring(decode_html(self.zf.read(nav)))
         out = []
         for ol in doc.xpath("//*[local-name()='nav']//*[local-name()='ol']"):
             for a in ol.xpath(".//*[local-name()='a'][@href]"):
@@ -352,7 +398,7 @@ class Epub:
     def _render(self, idx: int) -> Chapter:
         href = self.spine[idx]
         ch = Chapter(idx=idx, href=href, title=self._titles.get(idx, ""))
-        doc = lhtml.fromstring(self.zf.read(href))
+        doc = lhtml.fromstring(decode_html(self.zf.read(href)))
         body = doc.find("body")
         if body is None:
             body = doc
@@ -460,26 +506,84 @@ class Epub:
         ch.pages.append({"page": label, "id": anchor})
         return True
 
+    def _img_size(self, name: str):
+        """Intrinsic pixel size, read from the file rather than guessed at."""
+        if name not in self._sizes:
+            self._sizes[name] = None
+            try:
+                from PIL import Image
+
+                with self.zf.open(name) as fh, Image.open(fh) as im:
+                    self._sizes[name] = im.size
+            except Exception:  # noqa: BLE001 — unreadable image: treat as unknown
+                pass
+        return self._sizes[name]
+
+    def _decorative_images(self) -> set:
+        """Images that are furniture rather than illustrations.
+
+        Two signals, both publisher-agnostic: an image that recurs across many
+        documents is a logo or an ornament, and a very small one is furniture
+        however often it appears. Scanned from the raw markup so the answer is
+        known before any chapter is rendered.
+        """
+        if self._decorative is None:
+            counts: dict[str, int] = {}
+            for href in self.spine:
+                try:
+                    raw = self.zf.read(href).decode("utf-8", "replace")
+                except KeyError:
+                    continue
+                base = posixpath.dirname(href)
+                for src in set(re.findall(r"<im(?:g|age)[^>]+?src=[\"']([^\"']+)", raw)):
+                    if src.startswith(("http://", "https://", "data:")):
+                        continue
+                    target = posixpath.normpath(posixpath.join(base, src)) if base else src
+                    counts[target] = counts.get(target, 0) + 1
+            deco = {t for t, n in counts.items() if n >= REPEAT_IS_DECORATION}
+            for target in counts:
+                size = self._img_size(target)
+                if size and size[0] * size[1] < DECORATION_AREA:
+                    deco.add(target)
+            self._decorative = deco - {self.cover}
+        return self._decorative
+
     def _fix_img(self, el, base: str) -> None:
         src = el.get("src") or ""
         if src.startswith(("http://", "https://", "data:")):
             return
         target = posixpath.normpath(posixpath.join(base, src)) if base else src
-        full = "/api/res/" + target
-        is_cover = "cover-img" in (el.get("class") or "").split()
-        # point src at the thumbnail so the browser never fetches the full image
-        # on its own; the reader swaps in data-full on click
+        full = f"{self.res_prefix}/{target}"
+
+        if target in self._decorative_images():
+            # furniture: already small, and nothing to zoom into. Served whole
+            # and left out of the figure/caption treatment entirely.
+            el.set("src", full)
+            classes = (el.get("class") or "").split()
+            if "deco" not in classes:
+                el.set("class", " ".join(classes + ["deco"]))
+            return
+
+        # the cover is identified from the OPF, not from how it happens to be
+        # marked up — publishers spell that every possible way
+        is_cover = target == self.cover or "cover" in (el.get("class") or "").lower()
         el.set("src", f"{full}?w={COVER_WIDTH if is_cover else THUMB_WIDTH}")
         el.set("data-full", full)
-        # the per-image class is the only record of the intrinsic size; keep it as
-        # data-* so the thumbnail box can reserve the right shape (width/height
-        # attributes would describe the full image, not the thumbnail)
-        for cls in (el.get("class") or "").split():
-            if cls in self._img_dims:
-                w, h = self._img_dims[cls]
-                el.set("data-w", str(w))
-                el.set("data-h", str(h))
-                break
+        if is_cover:
+            classes = (el.get("class") or "").split()
+            if "cover-img" not in classes:
+                el.set("class", " ".join(classes + ["cover-img"]))
+        # the thumbnail box reserves the real shape, so text does not jump as
+        # figures load (width/height attributes would describe the full image)
+        size = self._img_size(target)
+        if not size:
+            for cls in (el.get("class") or "").split():
+                if cls in self._img_dims:
+                    size = self._img_dims[cls]
+                    break
+        if size:
+            el.set("data-w", str(size[0]))
+            el.set("data-h", str(size[1]))
 
     def _fix_link(self, el, idx: int) -> None:
         href = el.get("href")
@@ -510,6 +614,8 @@ class Epub:
         is kept so the book's own CSS still styles it.
         """
         for img in body.xpath(".//img"):
+            if "deco" in (img.get("class") or "").split():
+                continue
             p = img.getparent()
             if p is None or p.tag not in ("p", "div"):
                 continue
@@ -537,7 +643,7 @@ class Epub:
         pages = self.pages_index()
         return {
             **self.meta,
-            "cover": f"/api/res/{self.cover}" if self.cover else "",
+            "cover": f"{self.res_prefix}/{self.cover}" if self.cover else "",
             "chapters": chapters,
             "toc": self.toc,
             "pages": pages,

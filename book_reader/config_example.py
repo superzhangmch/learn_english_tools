@@ -2,7 +2,8 @@
 # in config.py; the browser never sees them, since /api/models exposes the
 # display "name" alone.
 
-BOOK_PATH = "/path/to/book.epub"
+# A directory of .epub files; each one appears on the shelf at /.
+BOOKS_DIR = "~/books"
 
 HOST = "127.0.0.1"          # bind wider only if you mean to expose the reader
 PORT = 8400

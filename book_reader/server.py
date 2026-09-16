@@ -29,7 +29,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from epub import Epub
+from library import Library
 
 try:
     import config as _cfg
@@ -38,7 +38,8 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-BOOK_PATH = os.environ.get("BOOK_PATH") or _cfg.BOOK_PATH
+BOOKS_DIR = os.environ.get("BOOKS_DIR") or getattr(_cfg, "BOOKS_DIR", "") \
+    or os.path.dirname(getattr(_cfg, "BOOK_PATH", "") or "") or "~/books"
 HOST = os.environ.get("HOST") or getattr(_cfg, "HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT") or getattr(_cfg, "PORT", 8400))
 
@@ -120,8 +121,15 @@ class GzipExceptStreams:
 
 app.add_middleware(GzipExceptStreams)
 
-book = Epub(BOOK_PATH)
-BOOK_ID = hashlib.sha1(os.path.basename(BOOK_PATH).encode("utf-8")).hexdigest()[:12]
+library = Library(BOOKS_DIR)
+
+
+def get_book(bid: str):
+    """The book, or None — callers turn that into a 404."""
+    try:
+        return library.book(bid)
+    except KeyError:
+        return None
 
 
 # ---------- store ----------
@@ -157,51 +165,79 @@ def init_db():
             created  REAL NOT NULL
         );
         CREATE INDEX IF NOT EXISTS vocab_book_created ON vocab(book, created DESC);
+        -- each book's own proper nouns; see tools/build_glossary.py. A general
+        -- dictionary is no help with Amphimachus, and has the wrong Paris.
+        CREATE TABLE IF NOT EXISTS glossary (
+            book TEXT NOT NULL, term TEXT NOT NULL, key TEXT NOT NULL,
+            ipa TEXT, zh TEXT, kind TEXT, note TEXT, n INTEGER,
+            PRIMARY KEY (book, term)
+        );
+        CREATE INDEX IF NOT EXISTS glossary_key ON glossary(book, key);
         """)
 
 
 init_db()
 
 
-# ---------- book ----------
+# ---------- shelf ----------
 
-@app.get("/api/book")
-async def api_book():
-    return {"id": BOOK_ID, **book.outline()}
+@app.get("/api/books")
+async def api_books():
+    """Everything on the shelf. Cheap: skimmed from each OPF and cached."""
+    return {"books": library.shelf()}
 
 
-@app.get("/api/book.css")
-async def api_book_css():
+@app.post("/api/books/rescan")
+async def api_rescan():
+    library.scan()
+    return {"books": library.shelf()}
+
+
+# ---------- one book ----------
+
+@app.get("/api/books/{bid}")
+async def api_book(bid: str):
+    book = get_book(bid)
+    if book is None:
+        return JSONResponse({"error": "no such book"}, status_code=404)
+    with db() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM glossary WHERE book=?", (bid,)).fetchone()[0]
+    return {"id": bid, "glossary": n, **book.outline()}
+
+
+@app.get("/api/books/{bid}/book.css")
+async def api_book_css(bid: str):
     """The book's own stylesheet, filtered and scoped to the article.
 
     This is what keeps the reader general instead of tuned to one publisher: the
     classes on the markup carry the structural typography, and the only thing
     that reliably knows what they mean is the book itself.
     """
-    return Response(
-        book.stylesheet(), media_type="text/css",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
+    book = get_book(bid)
+    if book is None:
+        return Response("", media_type="text/css", status_code=404)
+    return Response(book.stylesheet(), media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
-@app.get("/api/passage")
-async def api_passage(page_from: int = -1, page_to: int = -1, chapter: int = -1):
+@app.get("/api/books/{bid}/passage")
+async def api_passage(bid: str, page_from: int = -1, page_to: int = -1, chapter: int = -1):
     """How big a passage is, without sending it.
 
     The reader shows the size before you commit to a question; the text itself
     never crosses the network, since the server reads it from the epub.
     """
+    book = get_book(bid)
+    if book is None:
+        return JSONResponse({"error": "no such book"}, status_code=404)
     if page_from >= 0:
         pages = book.pages_index()
         if not pages:
             return {"chars": 0, "label": "本书没有印刷页码", "pages": 0}
         lo, hi = max(0, page_from), min(len(pages) - 1, page_to)
         text = book.page_text(lo, hi)
-        return {
-            "chars": len(text),
-            "pages": hi - lo + 1,
-            "label": f"p. {pages[lo]['page']} – {pages[hi]['page']}（共 {hi - lo + 1} 页）",
-        }
+        return {"chars": len(text), "pages": hi - lo + 1,
+                "label": f"p. {pages[lo]['page']} – {pages[hi]['page']}（共 {hi - lo + 1} 页）"}
     if chapter >= 0:
         try:
             text = book.chapter_text(chapter)
@@ -212,8 +248,11 @@ async def api_passage(page_from: int = -1, page_to: int = -1, chapter: int = -1)
     return JSONResponse({"error": "need page_from/page_to or chapter"}, status_code=400)
 
 
-@app.get("/api/chapter/{idx}")
-async def api_chapter(idx: int):
+@app.get("/api/books/{bid}/chapter/{idx}")
+async def api_chapter(bid: str, idx: int):
+    book = get_book(bid)
+    if book is None:
+        return JSONResponse({"error": "no such book"}, status_code=404)
     try:
         ch = book.chapter(idx)
     except IndexError:
@@ -238,14 +277,14 @@ THUMB_DIR = os.path.join(HERE, "cache", "thumbs")
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 
-def _thumb(path: str, width: int) -> str | None:
+def _thumb(book, path: str, width: int) -> str | None:
     """Downscale an image from the zip to `width` px, cached on disk.
 
     Real resizing, not a CSS shrink: a figure in this book is 15–70 KB, a 96 px
     thumbnail of it is under 3 KB, and the full image is only fetched if the
     reader actually opens it.
     """
-    key = hashlib.sha1(f"{path}|{width}".encode("utf-8")).hexdigest()[:20]
+    key = hashlib.sha1(f"{book.path}|{path}|{width}".encode("utf-8")).hexdigest()[:20]
     out = os.path.join(THUMB_DIR, f"{key}.jpg")
     if os.path.exists(out):
         return out
@@ -261,16 +300,17 @@ def _thumb(path: str, width: int) -> str | None:
         return None
 
 
-@app.get("/api/res/{path:path}")
-async def api_res(path: str, w: int = 0):
+@app.get("/api/books/{bid}/res/{path:path}")
+async def api_res(bid: str, path: str, w: int = 0):
     """Serve a resource straight out of the epub zip; `?w=` gives a thumbnail."""
-    if not book.has(path):
+    book = get_book(bid)
+    if book is None or not book.has(path):
         return JSONResponse({"error": "not found"}, status_code=404)
     media = MEDIA_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
     cache = {"Cache-Control": "public, max-age=86400"}
 
     if w and media.startswith("image/") and media != "image/svg+xml":
-        thumb = _thumb(path, max(16, min(w, 2000)))
+        thumb = _thumb(book, path, max(16, min(w, 2000)))
         if thumb:
             return FileResponse(thumb, media_type="image/jpeg", headers=cache)
     return StreamingResponse(book.open(path), media_type=media, headers=cache)
@@ -279,16 +319,21 @@ async def api_res(path: str, w: int = 0):
 # ---------- reading position ----------
 
 class Progress(BaseModel):
+    book: str
     chapter: int
     anchor: str = ""
     page: str = ""
 
 
 @app.get("/api/progress")
-async def get_progress():
+async def get_progress(book: str = ""):
+    """One book's position, or every book's — the shelf shows where you are."""
     with db() as conn:
-        row = conn.execute("SELECT * FROM progress WHERE book=?", (BOOK_ID,)).fetchone()
-    return dict(row) if row else {}
+        if book:
+            row = conn.execute("SELECT * FROM progress WHERE book=?", (book,)).fetchone()
+            return dict(row) if row else {}
+        rows = conn.execute("SELECT * FROM progress").fetchall()
+    return {"progress": {r["book"]: dict(r) for r in rows}}
 
 
 @app.put("/api/progress")
@@ -298,7 +343,7 @@ async def put_progress(p: Progress):
             "INSERT INTO progress(book, chapter, anchor, page, updated) VALUES(?,?,?,?,?) "
             "ON CONFLICT(book) DO UPDATE SET chapter=excluded.chapter, "
             "anchor=excluded.anchor, page=excluded.page, updated=excluded.updated",
-            (BOOK_ID, p.chapter, p.anchor, p.page, time.time()),
+            (p.book, p.chapter, p.anchor, p.page, time.time()),
         )
     return {"ok": True}
 
@@ -306,9 +351,12 @@ async def put_progress(p: Progress):
 # ---------- vocabulary book ----------
 
 @app.get("/api/vocab")
-async def list_vocab(limit: int = 500, words_only: bool = False):
-    sql = "SELECT * FROM vocab WHERE book=?"
-    args: list = [BOOK_ID]
+async def list_vocab(limit: int = 500, words_only: bool = False, book: str = ""):
+    sql = "SELECT * FROM vocab WHERE 1=1"
+    args: list = []
+    if book:
+        sql += " AND book=?"
+        args.append(book)
     if words_only:
         sql += " AND length(text) <= 40"
     sql += " ORDER BY created DESC LIMIT ?"
@@ -321,23 +369,53 @@ async def list_vocab(limit: int = 500, words_only: bool = False):
 @app.delete("/api/vocab/{item_id}")
 async def delete_vocab(item_id: int):
     with db() as conn:
-        conn.execute("DELETE FROM vocab WHERE id=? AND book=?", (item_id, BOOK_ID))
+        conn.execute("DELETE FROM vocab WHERE id=?", (item_id,))
     return {"ok": True}
 
 
-# ---------- dictionary ----------
+# ---------- the book's own glossary ----------
 
-@app.get("/api/dict")
-async def api_dict(word: str):
-    """Offline dictionary lookup — not wired up yet.
+def _variants(word: str):
+    """Spellings to try, in order of confidence."""
+    w = word.strip().strip("\u2018\u2019'\".,;:!?()[]")
+    seen, out = set(), []
+    for cand in (w, re.sub(r"[\u2019']s$", "", w),
+                 w[:-1] if w.endswith("s") else "",
+                 w[:-2] if w.endswith("es") else "",
+                 w[:-3] + "y" if w.endswith("ies") else "",
+                 w + "s"):
+        c = cand.strip().lower()
+        if c and len(c) > 1 and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
 
-    Kept as a seam: when a local dictionary (e.g. ECDICT) is added, single words
-    resolve here instantly and the LLM is only asked about phrases, sentences,
-    and the sense a word carries in this particular passage.
+
+@app.get("/api/books/{bid}/dict")
+async def api_dict(bid: str, word: str):
+    """Look a proper noun up in this book's glossary.
+
+    Instant and offline — the point of the button beside 解读 is that a name you
+    half-remember costs nothing to check, where an LLM round-trip would make you
+    weigh whether it is worth interrupting the page for.
     """
-    return JSONResponse(
-        {"error": "no local dictionary configured", "word": word}, status_code=501
-    )
+    with db() as conn:
+        for key in _variants(word):
+            row = conn.execute(
+                "SELECT term, ipa, zh, kind, note, n FROM glossary WHERE book=? AND key=?",
+                (bid, key)).fetchone()
+            if row:
+                return {"found": True, **dict(row)}
+        # a selected phrase may contain a name: "son of Peleus"
+        for token in re.findall(r"[A-Za-z\u00c0-\u024f'\u2019-]{3,}", word)[:6]:
+            for key in _variants(token):
+                row = conn.execute(
+                    "SELECT term, ipa, zh, kind, note, n FROM glossary WHERE book=? AND key=?",
+                    (bid, key)).fetchone()
+                if row:
+                    return {"found": True, "via": token, **dict(row)}
+        total = conn.execute("SELECT COUNT(*) FROM glossary WHERE book=?", (bid,)).fetchone()[0]
+    return {"found": False, "word": word, "glossary": total}
 
 
 # ---------- interpretation ----------
@@ -351,6 +429,7 @@ class InterpretReq(BaseModel):
     text: str = ""
     # a passage is named, not uploaded: indices into the book's printed-page
     # index, or a chapter for books that record no pages
+    book_id: str = ""            # which book the page indices refer to
     page_from: int = -1
     page_to: int = -1
     passage_chapter: int = -1
@@ -509,7 +588,7 @@ def _save_lookup(req: InterpretReq, answer: str) -> None:
         conn.execute(
             "INSERT INTO vocab(book, text, mode, chapter, chapter_title, page, "
             "sentence, answer, created) VALUES(?,?,?,?,?,?,?,?,?)",
-            (BOOK_ID, req.text.strip(), req.mode, req.chapter, req.chapter_title,
+            (req.book_id, req.text.strip(), req.mode, req.chapter, req.chapter_title,
              req.page, req.context.strip()[:2000], answer, time.time()),
         )
 
@@ -525,11 +604,14 @@ def _passage(req: InterpretReq) -> str:
     A question about twenty pages therefore uploads two integers rather than
     35 KB — and re-uploads nothing at all on each follow-up.
     """
+    if req.page_from < 0 and req.passage_chapter < 0:
+        return req.text
+    book = get_book(req.book_id)
+    if book is None:
+        return req.text
     if req.page_from >= 0:
         return book.page_text(req.page_from, req.page_to)
-    if req.passage_chapter >= 0:                 # books with no printed pages
-        return book.chapter_text(req.passage_chapter)
-    return req.text
+    return book.chapter_text(req.passage_chapter)   # books with no printed pages
 
 
 @app.post("/api/interpret")
@@ -615,6 +697,21 @@ def _sse(obj: dict) -> str:
 PAGES = os.path.join(HERE, "pages")
 
 
+def _asset_version() -> str:
+    """A token that changes whenever anything under static/ does.
+
+    Without it a browser keeps a cached script indefinitely — StaticFiles sends
+    no Cache-Control, so freshness is heuristic, and a phone will happily run
+    yesterday's JavaScript against today's HTML. That failure is silent: the page
+    works, one feature is just missing.
+    """
+    latest = 0
+    for root, _, files in os.walk(os.path.join(HERE, "static")):
+        for f in files:
+            latest = max(latest, int(os.stat(os.path.join(root, f)).st_mtime))
+    return str(latest)
+
+
 def _page(name: str, request: Request) -> Response:
     """Serve a page with revalidation rather than no-store.
 
@@ -625,16 +722,20 @@ def _page(name: str, request: Request) -> Response:
     """
     path = os.path.join(PAGES, name)
     stat = os.stat(path)
-    etag = f'W/"{int(stat.st_mtime)}-{stat.st_size}"'
+    version = _asset_version()
+    # the page's identity includes its assets': a new script must invalidate the
+    # HTML that loads it, or the two drift apart
+    etag = f'W/"{int(stat.st_mtime)}-{stat.st_size}-{version}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     with open(path, encoding="utf-8") as f:
-        return HTMLResponse(f.read(), headers={"ETag": etag, "Cache-Control": "no-cache"})
+        body = f.read().replace("{{V}}", version)
+    return HTMLResponse(body, headers={"ETag": etag, "Cache-Control": "no-cache"})
 
 
-@app.get("/")
-async def root():
-    return RedirectResponse("/read", status_code=302)
+@app.get("/", response_class=HTMLResponse)
+async def page_library(request: Request):
+    return _page("library.html", request)
 
 
 @app.get("/read", response_class=HTMLResponse)
@@ -649,18 +750,16 @@ async def page_vocab(request: Request):
 
 @app.get("/favicon.ico")
 async def favicon():
-    """The cover, at icon size.
+    """The app's own mark, not a book's cover.
 
-    Browsers fetch this unprompted on every page load, so it must not be the
-    full-size cover — that alone was 157 KB, six times the rest of a cold load
-    put together.
+    Browsers fetch this unprompted on every page load. It used to serve a
+    thumbnail of whichever book happened to be first on the shelf — arbitrary,
+    and 2 KB each time; a 3 KB file cached for a year is both more honest and
+    cheaper.
     """
-    if book.cover and book.has(book.cover):
-        icon = _thumb(book.cover, 64)
-        if icon:
-            return FileResponse(icon, media_type="image/jpeg",
-                                headers={"Cache-Control": "public, max-age=604800"})
-    return JSONResponse({}, status_code=404)
+    return FileResponse(os.path.join(HERE, "static", "favicon.ico"),
+                        media_type="image/x-icon",
+                        headers={"Cache-Control": "public, max-age=31536000"})
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
@@ -669,7 +768,8 @@ app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="
 if __name__ == "__main__":
     import uvicorn
 
-    print(f"Book Reader → http://{HOST}:{PORT}/read")
-    print(f"  {book.meta['title']} — {book.meta['author']}")
-    print(f"  {len(book.spine)} chapters, {book.outline()['total_pages']} printed pages")
+    print(f"Book Reader → http://{HOST}:{PORT}/")
+    print(f"  {len(library.shelf())} books in {library.root}")
+    for meta in library.shelf():
+        print(f"    {meta['title'][:52]:<54}{meta['chapters']:>3} ch")
     uvicorn.run(app, host=HOST, port=PORT)

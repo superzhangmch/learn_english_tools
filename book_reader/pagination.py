@@ -72,7 +72,9 @@ def nav_page_list(zf, names, nav_href: str) -> dict:
     if not nav_href or nav_href not in names:
         return out
     try:
-        doc = lhtml.fromstring(zf.read(nav_href))
+        from epub import decode_html
+
+        doc = lhtml.fromstring(decode_html(zf.read(nav_href)))
     except Exception:  # noqa: BLE001 — a malformed nav is not worth failing over
         return out
     base = posixpath.dirname(nav_href)

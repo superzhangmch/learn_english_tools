@@ -18,6 +18,21 @@
   const STREAM = window.INTERPRET_STREAM !== false;
   const FS_KEY = 'nrw_ans_fs', FS_MIN = 13, FS_MAX = 32, FS_DEF = 19;
   const DEFAULT_HINT = '追问… （回车发送）';
+  // Which buttons the selection bubble offers, and their titles. A page can
+  // replace this before loading the script — the book reader adds a local
+  // glossary lookup, the news reader has no glossary to look anything up in.
+  let MODES = window.INTERPRET_MODES ||
+    [{ m: 'interpret', label: '✨ 解读' }, { m: 'grammar', label: '语法' }];
+  // mode -> async (payload) => html. A mode listed here is answered on the spot
+  // instead of being streamed from /api/interpret.
+  const LOCAL = window.INTERPRET_LOCAL || {};
+
+  /** Replace the bubble's buttons. Callable at any time: what a page can offer
+   *  often is not known until its own data has loaded. */
+  function setModes(list, local) {
+    if (Array.isArray(list) && list.length) MODES = list;
+    Object.assign(LOCAL, local || {});
+  }
 
   const CSS = `
   .nrw-pop{position:fixed;display:none;z-index:2147483000;transform:translate(-50%,-100%);
@@ -172,9 +187,7 @@
     const st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
 
     pop = document.createElement('div'); pop.className = 'nrw-pop';
-    pop.innerHTML = '<span class="nrw-b" data-m="interpret">✨ 解读</span>' +
-                    '<span class="nrw-b" data-m="grammar">语法</span>' +
-                    '<span class="nrw-b" data-m="background">背景</span>';
+    // filled in by paintModes() on every popup, since the list can change
     pop.addEventListener('click', (e) => {
       const b = e.target.closest('.nrw-b'); if (!b) return;
       hidePopup();
@@ -241,9 +254,17 @@
     }, { passive: true });
   }
 
+  function paintModes() {
+    const want = MODES.map(x => x.m).join(',');
+    if (pop.dataset.modes === want) return;
+    pop.dataset.modes = want;
+    pop.innerHTML = MODES.map(x =>
+      `<span class="nrw-b" data-m="${x.m}">${x.label}</span>`).join('');
+  }
+
   function hidePopup() { if (pop) pop.style.display = 'none'; }
   function popupAt(rect, pl, below) {
-    ensureDOM(); payload = pl || {};
+    ensureDOM(); paintModes(); payload = pl || {};
     try { const g = window.getSelection(); pendingRange = g.rangeCount ? g.getRangeAt(0).cloneRange() : null; } catch (_) { pendingRange = null; }
     pop.classList.toggle('below', !!below);
     pop.style.display = 'block';   // must be visible before we can measure it
@@ -293,6 +314,7 @@
     s.turns.forEach(t => {
       if ('q' in t) { addTurn('q').textContent = t.q; return; }
       const el = addTurn('a');
+      if (t.html !== undefined && !t.err) { el.innerHTML = t.html; return; }
       if (t.err) {                       // failed turn → error + a Retry button
         el.innerHTML = '<div class="nrw-err">出错：' + esc(t.err) + '</div>';
         const b = document.createElement('button');
@@ -322,7 +344,9 @@
     } catch (_) { document.body.appendChild(mk); }
     return mk;
   }
-  const TITLES = { grammar: '语法分析', background: '背景', ask: '问这几页', interpret: '✨ 解读' };
+  const TITLES = Object.assign(
+    { grammar: '语法分析', background: '背景', ask: '问这几页', interpret: '✨ 解读' },
+    window.INTERPRET_TITLES || {});
   function setTitle(s) {
     const t = drawer.querySelector('.dh .t');
     if (t) t.textContent = TITLES[s.mode] || TITLES.interpret;
@@ -340,8 +364,23 @@
   function open(pl, deferred, mode) {
     ensureDOM();
     const s = { payload: pl || {}, mode: mode || 'interpret', convo: [], turns: [], marker: null, abort: null, streaming: false };
-    s.marker = makeMarker(s);   // always drop a marker so you can revisit this spot
     input.placeholder = pl.inputHint || DEFAULT_HINT;
+
+    if (LOCAL[s.mode]) {
+      // No inline marker for a locally answered mode: the dot exists so you can
+      // come back to a lookup that is still running, and this one is already
+      // done. Leaving one behind just litters the text.
+      active = s; setTitle(s); renderContext(s); thread.innerHTML = ''; input.value = '';
+      setBusy(false); drawer.classList.add('open');
+      const turn = { html: '<div class="think">查询中…</div>' };
+      s.turns.push(turn); renderThread(s);
+      Promise.resolve(LOCAL[s.mode](s.payload))
+        .then(html => { turn.html = html; })
+        .catch(e => { turn.err = e.message || String(e); })
+        // follow-ups are ordinary questions about the selection, not more lookups
+        .finally(() => { s.mode = 'interpret'; if (s === active) renderThread(s); });
+      return;
+    }
     // awaitQuestion: open with the context shown but send nothing — the user's
     // own first question comes through the same input as every follow-up, so
     // there is one place to type rather than one per turn number
@@ -350,6 +389,7 @@
       setBusy(false); drawer.classList.add('open'); input.focus();
       return;
     }
+    s.marker = makeMarker(s);   // so a backgrounded answer can be found again
     if (deferred) {
       runTurn(s);               // background — click the marker to view it
     } else {
@@ -430,6 +470,6 @@
   }
 
   function settings() { ensureDOM(); const o = menuEl.classList.toggle('open'); if (o) { buildModels(); markTheme(); } }
-  window.Interpret = { popupAt, open, hidePopup, close, settings, bumpFont, update };
+  window.Interpret = { popupAt, open, hidePopup, close, settings, bumpFont, update, setModes };
   if (document.body) ensureDOM(); else document.addEventListener('DOMContentLoaded', ensureDOM);
 })();
